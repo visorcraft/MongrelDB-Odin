@@ -24,24 +24,26 @@ jobs:
         # -dev packages (providing llvm-config + libLLVM) that the stock runner
         # image does not ship. Without them the compiler segfaults at build
         # time with `LLVM Error: No such file or directory`. Current Odin
-        # requires LLVM >= 17, which is not in the Ubuntu LTS archive, so pull
-        # it from the official apt.llvm.org repository.
+        # (dev-2026-07) references LLVMFastMathFlags which was removed from
+        # the LLVM C API in LLVM 18, so LLVM >= 18 is required. The runner is
+        # ubuntu-24.04 (noble); pull LLVM 18 from the official apt.llvm.org
+        # noble repository.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libcurl4-openssl-dev wget gnupg ca-certificates
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | \
             sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main" | \
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-18 main" | \
             sudo tee /etc/apt/sources.list.d/llvm.list >/dev/null
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            llvm-17-dev clang-17 libpolly-17-dev
+            llvm-18-dev clang-18 libpolly-18-dev
 
       - name: Install Odin
         env:
-          # Point Odin's build script at the LLVM 17 toolchain we just installed.
-          LLVM_CONFIG: /usr/lib/llvm-17/bin/llvm-config
+          # Point Odin's build script at the LLVM 18 toolchain we just installed.
+          LLVM_CONFIG: /usr/lib/llvm-18/bin/llvm-config
         run: |
           git clone --depth 1 https://github.com/odin-lang/Odin.git /opt/odin
           (cd /opt/odin && ./build_odin.sh release)
@@ -96,24 +98,26 @@ jobs:
         # -dev packages (providing llvm-config + libLLVM) that the stock runner
         # image does not ship. Without them the compiler segfaults at build
         # time with `LLVM Error: No such file or directory`. Current Odin
-        # requires LLVM >= 17, which is not in the Ubuntu LTS archive, so pull
-        # it from the official apt.llvm.org repository.
+        # (dev-2026-07) references LLVMFastMathFlags which was removed from
+        # the LLVM C API in LLVM 18, so LLVM >= 18 is required. The runner is
+        # ubuntu-24.04 (noble); pull LLVM 18 from the official apt.llvm.org
+        # noble repository.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libcurl4-openssl-dev wget gnupg ca-certificates
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | \
             sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main" | \
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-18 main" | \
             sudo tee /etc/apt/sources.list.d/llvm.list >/dev/null
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            llvm-17-dev clang-17 libpolly-17-dev
+            llvm-18-dev clang-18 libpolly-18-dev
 
       - name: Install Odin
         env:
-          # Point Odin's build script at the LLVM 17 toolchain we just installed.
-          LLVM_CONFIG: /usr/lib/llvm-17/bin/llvm-config
+          # Point Odin's build script at the LLVM 18 toolchain we just installed.
+          LLVM_CONFIG: /usr/lib/llvm-18/bin/llvm-config
         run: |
           git clone --depth 1 https://github.com/odin-lang/Odin.git /opt/odin
           (cd /opt/odin && ./build_odin.sh release)
