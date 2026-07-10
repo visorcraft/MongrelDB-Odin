@@ -19,12 +19,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install libcurl (HTTP transport)
+      - name: Install libcurl (HTTP transport) and LLVM (Odin backend)
+        # Odin's `build_odin.sh release` links against LLVM, which needs the
+        # -dev packages (providing llvm-config + libLLVM) that the stock runner
+        # image does not ship. Without them the compiler segfaults at build
+        # time with `LLVM Error: No such file or directory`. Current Odin
+        # requires LLVM >= 17, which is not in the Ubuntu LTS archive, so pull
+        # it from the official apt.llvm.org repository.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            libcurl4-openssl-dev wget gnupg ca-certificates
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | \
+            sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main" | \
+            sudo tee /etc/apt/sources.list.d/llvm.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            llvm-17-dev clang-17 libpolly-17-dev
 
       - name: Install Odin
+        env:
+          # Point Odin's build script at the LLVM 17 toolchain we just installed.
+          LLVM_CONFIG: /usr/lib/llvm-17/bin/llvm-config
         run: |
           git clone --depth 1 https://github.com/odin-lang/Odin.git /opt/odin
           (cd /opt/odin && ./build_odin.sh release)
@@ -46,6 +63,7 @@ jobs:
         # via the `mdb` collection, which points at the repo root so the bare
         # `mongreldb` package directory resolves: `-collection:mdb=.`
         run: |
+          mkdir -p build
           for ex in examples/*.odin; do
             name=$(basename "$ex" .odin)
             echo "=== Building $ex ==="
@@ -73,12 +91,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install libcurl (HTTP transport)
+      - name: Install libcurl (HTTP transport) and LLVM (Odin backend)
+        # Odin's `build_odin.sh release` links against LLVM, which needs the
+        # -dev packages (providing llvm-config + libLLVM) that the stock runner
+        # image does not ship. Without them the compiler segfaults at build
+        # time with `LLVM Error: No such file or directory`. Current Odin
+        # requires LLVM >= 17, which is not in the Ubuntu LTS archive, so pull
+        # it from the official apt.llvm.org repository.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            libcurl4-openssl-dev wget gnupg ca-certificates
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | \
+            sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main" | \
+            sudo tee /etc/apt/sources.list.d/llvm.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            llvm-17-dev clang-17 libpolly-17-dev
 
       - name: Install Odin
+        env:
+          # Point Odin's build script at the LLVM 17 toolchain we just installed.
+          LLVM_CONFIG: /usr/lib/llvm-17/bin/llvm-config
         run: |
           git clone --depth 1 https://github.com/odin-lang/Odin.git /opt/odin
           (cd /opt/odin && ./build_odin.sh release)
@@ -89,6 +124,7 @@ jobs:
 
       - name: Build examples
         run: |
+          mkdir -p build
           for ex in examples/*.odin; do
             name=$(basename "$ex" .odin)
             echo "=== Building $ex ==="
