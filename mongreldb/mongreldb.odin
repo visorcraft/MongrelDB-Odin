@@ -157,8 +157,8 @@ table_names :: proc(db: Client, allocator := context.allocator) -> ([]string, Mo
 	if !ok { return nil, .Json }
 	out := make([dynamic]string, 0, len(arr), allocator)
 	for item in arr {
-		s, ok := item.(JSONString)
-		if !ok { free_dyn(out); return nil, .Json }
+		s, sok := item.(JSONString)
+		if !sok { free_dyn(out); return nil, .Json }
 		append(&out, s)
 	}
 	return out[:], .None_

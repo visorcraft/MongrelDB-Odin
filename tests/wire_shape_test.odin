@@ -18,7 +18,7 @@ import "core:fmt"
 import "core:strings"
 import "core:testing"
 
-import m "mongreldb"
+import m "mdb:mongreldb"
 
 // contains is a local helper since the assertion reads more clearly with it
 // than with the raw strings.has_prefix/suffix helpers.

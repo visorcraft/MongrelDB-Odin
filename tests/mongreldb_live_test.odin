@@ -15,7 +15,7 @@ import "core:fmt"
 import "core:os"
 import "core:testing"
 
-import m "mongreldb"
+import m "mdb:mongreldb"
 
 // harness_client is the shared Client, lazily created on first use by
 // ensure_client. nil means "no daemon reachable - tests short-circuit".
@@ -101,8 +101,8 @@ cell_value :: proc(row: m.JSONValue, col_id: i64) -> m.JSONValue {
 	if !ok2 { return nil }
 	i := 0
 	for i + 1 < len(cells) {
-		id, ok := cells[i].(m.JSONInteger)
-		if ok && i64(id) == col_id {
+		id, cok := cells[i].(m.JSONInteger)
+		if cok && i64(id) == col_id {
 			return cells[i + 1]
 		}
 		i += 2
@@ -464,5 +464,5 @@ test_error_type_carries_status :: proc(t: ^testing.T) {
 	testing.expectf(t, err == .Not_Found, "expected Not_Found, got %s", m.mongrel_error_string(err))
 }
 
-// `odin test tests -collection:mongreldb=src` discovers and runs every
+// `odin test tests -collection:mdb=.` discovers and runs every
 // `@(test)` proc in this package, generating its own runner entry point.

@@ -19,14 +19,16 @@ becomes visible.
 write is independent and you do not need atomicity across multiple rows.
 
 ```odin
-r := []mongreldb.Cell{
-	{1, mongreldb.int_value(1)},
-	{2, mongreldb.string_value("Alice")},
-	{3, mongreldb.float_value(99.5)},
+import m "mdb:mongreldb"
+
+r := []m.Cell{
+	{1, m.int_value(1)},
+	{2, m.string_value("Alice")},
+	{3, m.float_value(99.5)},
 }
-_, err := db.put("orders", r, "" /* no idempotency key */)
+_, err := m.put(db, "orders", r, "" /* no idempotency key */)
 if err != .None_ {
-	fmt.eprintf("put failed: %s\n", mongreldb.mongrel_error_string(err))
+	fmt.eprintf("put failed: %s\n", m.mongrel_error_string(err))
 }
 ```
 
@@ -40,33 +42,34 @@ When several writes must succeed or fail together, stage them on a
 request and commit atomically.
 
 ```odin
-a := make([]mongreldb.Cell, 2)
-a[0] = {1, mongreldb.int_value(10)}
-a[1] = {2, mongreldb.string_value("Dave")}
+a := make([dynamic]m.Cell, 2)
+a[0] = {1, m.int_value(10)}
+a[1] = {2, m.string_value("Dave")}
 
-mut txn := db.begin()
-defer mongreldb.free_transaction(&txn)
-txn.txn_put("orders", a, false)
+txn := m.begin(db)
+defer m.free_transaction(&txn)
+_, perr := m.txn_put(&txn, "orders", a[:], false)
+if perr != .None_ { /* ... */ }
 
-results, err := txn.commit("")
+results, err := m.commit(&txn, "")
 ```
 
-Each `txn_*` helper appends one op and returns `^Transaction` so the calls can
-chain:
+Each `txn_*` helper appends one op and returns `(^Transaction, Mongrel_Error)`
+so you can check or chain:
 
 ```odin
-mut txn := db.begin()
-defer mongreldb.free_transaction(&txn)
-txn.txn_put("orders", cells_a, false)
-txn.txn_put("orders", cells_b, false)
-txn.txn_delete_by_pk("orders", mongreldb.int_value(2))
-results, err := txn.commit("")
+txn := m.begin(db)
+defer m.free_transaction(&txn)
+m.txn_put(&txn, "orders", cells_a[:], false)
+m.txn_put(&txn, "orders", cells_b[:], false)
+m.txn_delete_by_pk(&txn, "orders", m.int_value(2))
+results, err := m.commit(&txn, "")
 ```
 
 `txn_count` returns the number of staged operations (handy for asserts):
 
 ```odin
-if txn.txn_count() != 3 { panic("expected 3 ops") }
+if m.txn_count(&txn) != 3 { panic("expected 3 ops") }
 ```
 
 ## Idempotency keys for safe retries
@@ -81,18 +84,18 @@ Pass the key as the last argument to `commit` (or `put` / `upsert`):
 ```odin
 // A handler that must not double-charge, even if the client retries or the
 // connection drops after the daemon committed.
-charge := make([]mongreldb.Cell, 2)
-charge[0] = {1, mongreldb.string_value(order_id)}
-charge[1] = {2, mongreldb.float_value(199.0)}
+charge := make([dynamic]m.Cell, 2)
+charge[0] = {1, m.string_value(order_id)}
+charge[1] = {2, m.float_value(199.0)}
 
-mut txn := db.begin()
-defer mongreldb.free_transaction(&txn)
-txn.txn_put("charges", charge, false)
+txn := m.begin(db)
+defer m.free_transaction(&txn)
+m.txn_put(&txn, "charges", charge[:], false)
 
 // Use a stable, business-meaningful key derived from the request. On a retry
 // with the same key the daemon returns the first commit's result instead of
 // inserting a second row.
-results, err := txn.commit("charge-order-123")
+results, err := m.commit(&txn, "charge-order-123")
 ```
 
 Rules for keys:
@@ -112,7 +115,7 @@ the status to the typed error.
 Check the category:
 
 ```odin
-results, err := txn.commit("")
+results, err := m.commit(&txn, "")
 switch err {
 case .None_:
 	// ok - read `results`
@@ -122,7 +125,7 @@ case .Conflict:
 case .Auth:
 	fmt.eprintf("not authorized\n")
 case:
-	fmt.eprintf("commit failed: %s\n", mongreldb.mongrel_error_string(err))
+	fmt.eprintf("commit failed: %s\n", m.mongrel_error_string(err))
 }
 ```
 
@@ -146,16 +149,16 @@ There are two notions of "rollback":
    later `commit` is a no-op:
 
 ```odin
-mut txn := db.begin()
-defer mongreldb.free_transaction(&txn)
-txn.txn_put("orders", cells, false)
+txn := m.begin(db)
+defer m.free_transaction(&txn)
+m.txn_put(&txn, "orders", cells[:], false)
 
 if !business_rule_ok() {
 	// Discard the batch locally. The daemon has seen nothing.
-	txn.rollback()
+	m.rollback(&txn)
 	return
 }
-results, _ := txn.commit("")
+results, _ := m.commit(&txn, "")
 ```
 
 Calling `commit` or `rollback` on a transaction that has already been committed

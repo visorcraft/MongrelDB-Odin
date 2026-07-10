@@ -23,12 +23,13 @@ surface in one place, see the root [README](../README.md).
 
 ## How the client is structured
 
-The library is three source files in `src/`, all in `package mongreldb`:
+The library is the `mongreldb/` directory (declared as `package mongreldb`),
+three source files:
 
 - `mongreldb.odin` - the public API: `connect`, CRUD, query builder, transactions, SQL, schema.
 - `json.odin` - a self-contained `JSONValue` union, ordered-object type, parser, and serializer.
 - `curl.odin` - a thin libcurl C-FFI binding (Odin's `core:net` is a low-level sockets layer with no HTTP client).
 
-Import the library by registering a collection named `mongreldb` pointing at
-`src/`, then `import mongreldb "mongreldb"`. See [quickstart.md](quickstart.md)
+Import the library through a collection named `mdb` that points at your repo
+root, then `import m "mdb:mongreldb"`. See [quickstart.md](quickstart.md)
 for the exact build commands.

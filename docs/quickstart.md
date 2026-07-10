@@ -8,36 +8,42 @@ daemon, and writing, running, and understanding a complete program.
 
 ## 1. Prerequisites
 
-You need three things installed: Odin, libcurl (with headers), and a
-`mongreldb-server` daemon.
+You need two things installed: the Odin compiler and a `mongreldb-server`
+daemon.
 
-### Install Odin and libcurl
+### Install Odin
 
-Odin is built from source (it tracks a moving dev branch). Clone and build it:
-
-```sh
-git clone --depth 1 https://github.com/odin-lang/Odin.git
-cd Odin && ./build_odin.sh release
-# Add the Odin binary to your PATH (or invoke it directly as ./odin).
-```
-
-On Debian/Ubuntu install libcurl:
-
-```sh
-sudo apt install libcurl4-openssl-dev
-```
-
-On Fedora:
-
-```sh
-sudo dnf install libcurl-devel
-```
-
-Verify:
+MongrelDB Odin is built against a recent Odin dev build. Verify it:
 
 ```sh
 odin version
-pkg-config --modversion libcurl   # 8.x
+# dev-2026-07:... (or newer)
+```
+
+If you do not have it, build Odin from source (it bundles its own LLVM):
+
+```sh
+git clone https://github.com/odin-lang/Odin.git
+cd Odin && ./build_odin.sh release
+export PATH="$PWD:$PATH"
+```
+
+See <https://odin-lang.org/> for details.
+
+### Install libcurl
+
+The HTTP transport is libcurl, linked via C FFI. On Debian/Ubuntu:
+
+```sh
+sudo apt-get install -y libcurl4-openssl-dev
+```
+
+On Fedora: `sudo dnf install curl-devel`. On macOS libcurl ships with the
+system. Verify the linker can find it:
+
+```sh
+curl-config --version
+# 8.x ...
 ```
 
 ### Install mongreldb-server
@@ -65,7 +71,7 @@ data in the directory you pass as its first argument.
 
 ```sh
 mkdir -p /tmp/mdb-data
-/path/to/mongreldb-server /tmp/mdb-data
+./bin/mongreldb-server /tmp/mdb-data
 ```
 
 In another terminal, sanity-check it:
@@ -79,41 +85,42 @@ Leave the daemon running for the rest of this guide.
 
 ## 3. Build the client
 
-The client is a set of source files in `src/`. Build the whole package by
-pointing `odin build` at any file in the collection:
+The library is the `mongreldb/` directory (declared as `package mongreldb`).
+Build the whole package directly:
 
 ```sh
-odin build src/mongreldb.odin -collection:mongreldb=src -vet
+odin build mongreldb -build-mode:lib -vet
 ```
 
-The `-collection:mongreldb=src` flag registers a collection named `mongreldb`
-that resolves `import "mongreldb"` to the library sources. You pass this same
-flag whenever you build a program that imports the client.
+Programs that import the client register a collection named `mdb` that points
+at the repo root, so `import "mdb:mongreldb"` resolves to the `mongreldb/`
+package directory. You pass `-collection:mdb=.` whenever you build a program
+that imports the client.
 
 ## 4. Write your first program
 
-Create `demo.odin`:
+Create `demo.odin` in the repo root:
 
 ```odin
 package main
 
 import "core:fmt"
-import mongreldb "mongreldb"
+import m "mdb:mongreldb"
 
 main :: proc() {
 	// 1. Connect to the daemon. An empty url falls back to
 	//    http://127.0.0.1:8453.
-	db := mongreldb.connect("http://127.0.0.1:8453", mongreldb.Options{})
+	db := m.connect("http://127.0.0.1:8453", m.Options{})
 
 	// 2. Health check before doing anything else.
-	ok, err := db.health()
+	ok, err := m.health(db)
 	if err != .None_ || !ok {
-		fmt.eprintf("daemon not reachable: %s\n", mongreldb.mongrel_error_string(err))
+		fmt.eprintf("daemon not reachable: %s\n", m.mongrel_error_string(err))
 		return
 	}
 
 	// 3. Create a table. Each column has a stable numeric id, a name, a type,
-	//    and flags. The first column is the primary key.
+	//    and flags. The primary_key column is the row identity.
 	//
 	//    Two optional fields extend the schema:
 	//      - has_enum + enum_variants: a fixed set of allowed values for a text
@@ -122,13 +129,13 @@ main :: proc() {
 	//        the column.
 	//    Both default to absent and are dropped from the wire JSON when not
 	//    set, so the existing schema stays valid.
-	status_variants := make([dynamic]string)
-	defer delete(status_variants)
+	status_variants: [dynamic]string
 	append(&status_variants, "active")
 	append(&status_variants, "inactive")
 	append(&status_variants, "paused")
+	defer delete(status_variants)
 
-	cols := []mongreldb.Column{
+	cols := []m.Column{
 		{id = 1, name = "id", ty = "int64", primary_key = true},
 		{id = 2, name = "customer", ty = "varchar"},
 		{id = 3, name = "amount", ty = "float64"},
@@ -136,43 +143,44 @@ main :: proc() {
 			has_enum = true, enum_variants = status_variants,
 			has_default = true, default_value = "active"},
 	}
-	tid, cerr := db.create_table("orders", cols)
+	tid, cerr := m.create_table(db, "orders", cols)
 	if cerr != .None_ {
-		fmt.eprintf("create table: %s\n", mongreldb.mongrel_error_string(cerr))
+		fmt.eprintf("create table: %s\n", m.mongrel_error_string(cerr))
 		return
 	}
+	fmt.printf("created table id: %lld\n", tid)
 
 	// 4. Insert rows. Cells pair column id + value. The status column is
 	//    constrained to {"active","inactive","paused"}.
-	r1 := []mongreldb.Cell{
-		{1, mongreldb.int_value(1)},
-		{2, mongreldb.string_value("Alice")},
-		{3, mongreldb.float_value(99.5)},
-		{4, mongreldb.string_value("active")},
+	r1 := []m.Cell{
+		{1, m.int_value(1)},
+		{2, m.string_value("Alice")},
+		{3, m.float_value(99.5)},
+		{4, m.string_value("active")},
 	}
-	_, perr := db.put("orders", r1, "")
+	_, perr := m.put(db, "orders", r1, "")
 	if perr != .None_ {
-		fmt.eprintf("put: %s\n", mongreldb.mongrel_error_string(perr))
+		fmt.eprintf("put: %s\n", m.mongrel_error_string(perr))
 		return
 	}
 
 	// 5. Query with a native index condition. The range index serves this in
 	//    sub-millisecond.
-	cond := mongreldb.json_object_make()
-	mongreldb.json_object_set(&cond, "column", mongreldb.int_value(3))
-	mongreldb.json_object_set(&cond, "min", mongreldb.float_value(50.0))
-	mut qb := db.query("orders")
-	defer mongreldb.free_query_builder(&qb)
-	qb.where_("range_f64", cond)
-	rows, qerr := qb.execute()
+	cond := m.json_object_make()
+	m.json_object_set(&cond, "column", m.int_value(3))
+	m.json_object_set(&cond, "min", m.float_value(50.0))
+	qb := m.query(db, "orders")
+	defer m.free_query_builder(&qb)
+	m.where_(&qb, "range_f64", cond)
+	rows, qerr := m.execute(&qb)
 	if qerr != .None_ {
-		fmt.eprintf("query: %s\n", mongreldb.mongrel_error_string(qerr))
+		fmt.eprintf("query: %s\n", m.mongrel_error_string(qerr))
 		return
 	}
 	fmt.printf("query returned %d rows\n", len(rows))
 
 	// 6. Count the rows.
-	n, _ := db.count("orders")
+	n, _ := m.count(db, "orders")
 	fmt.printf("total rows: %lld\n", n)
 }
 ```
@@ -180,18 +188,18 @@ main :: proc() {
 Build and run it:
 
 ```sh
-odin run demo.odin -collection:mongreldb=src -out:demo
+odin run demo.odin -file -collection:mdb=. -out:demo
 ./demo
 ```
 
-You should see the row count of 1.
+You should see a row count of 1.
 
 ## 5. What each part does
 
 | Code | What it does |
 |------|--------------|
-| `connect(url, options)` | Builds an HTTP client targeting one daemon. The `Client` is a value type; pass it by value (it carries no resources to close). |
-| `health(db)` | GET `/health`; returns `.None_` when the daemon answers. Always check before real work. |
+| `connect(url, options)` | Builds an HTTP client targeting one daemon. The `Client` is a value type carrying the base URL and credentials. |
+| `health(db)` | GET `/health`; returns `(true, .None_)` when the daemon answers. Always check before real work. |
 | `create_table(db, name, cols)` | POST `/kit/create_table`. Column `id`s are the on-wire identifiers; use them everywhere else. |
 | `col.has_enum / enum_variants` | Optional. Constrains a text column to a fixed value set; server-enforced on commit, surfaces as `.Conflict` on a row outside the set. Absent when `has_enum` is false. |
 | `col.has_default / default_value` | Optional. Default value string for the column. Absent when `has_default` is false. The server's `default_expr` field name is also accepted. |
@@ -199,11 +207,49 @@ You should see the row count of 1.
 | `query(db, table) + where_` | Builds a `/kit/query` body. Conditions push down to native indexes. |
 | `count(db, table)` | GET `/tables/{name}/count`. |
 
-## 6. Common pitfalls
+## 6. Constrained columns
+
+`Column` accepts two optional constraint-style fields that are forwarded to the
+daemon verbatim. They are omitted from the JSON body when not set, so existing
+schemas that don't set them produce an identical payload.
+
+| Field | Type | Effect |
+|-------|------|--------|
+| `has_enum` + `enum_variants` | `bool` + `[dynamic]string` | Restrict the column to one of the listed string values. The engine rejects writes outside the set with `.Conflict`. |
+| `has_default` + `default_value` | `bool` + `string` | Default value applied when the cell is omitted on a `put`. Sent as a raw string and coerced server-side per the column's `ty`. |
+
+Both fields compose. A column can be a plain string, an enum-only string, a
+string with a default, or an enum with a default:
+
+```odin
+// Plain string - no constraints, no extra keys on the wire.
+{id = 2, name = "customer", ty = "varchar"},
+
+// Enum only - writes outside the set are rejected at commit time.
+{id = 4, name = "status", ty = "varchar",
+   has_enum = true, enum_variants = status_variants},
+
+// Enum with a default - the engine fills in "active" when the cell is omitted.
+{id = 5, name = "currency", ty = "varchar",
+   has_enum = true, enum_variants = currency_variants,
+   has_default = true, default_value = "USD"},
+```
+
+An empty `enum_variants` is also omitted, so `has_enum = false` and
+`has_enum = true` with an empty dynamic array produce identical wire shapes.
+
+## 7. Common pitfalls
 
 **Using the column name instead of the column id.** Every on-wire API uses the
 numeric `id` from `create_table`, never the `name`. Conditions take the int64
-`column` (rewritten to `column_id`), not the string name.
+`column` (rewritten to `column_id`), not the string name:
+
+```odin
+// Wrong:
+m.json_object_set(&cond, "column", m.string_value("amount"))
+// Right:
+m.json_object_set(&cond, "column", m.int_value(3))
+```
 
 **Forgetting to free a builder or transaction.** A `QueryBuilder` and a
 `Transaction` hold dynamic allocations. Call `free_query_builder(&qb)` /
@@ -214,6 +260,13 @@ until their owning JSON value is destroyed.
 **Treating a single `put` as non-transactional.** `put` is a one-op
 transaction. A unique constraint violation surfaces as `.Conflict` (HTTP 409),
 not as a silent no-op.
+
+**Calling `commit` twice on the same `Transaction`.** The second call returns
+`.Already_Committed`. Create a fresh `begin(db)` for each logical unit of work.
+
+**Embedding borrowed strings in a `JSONValue`.** Strings inside a `JSONValue`
+must be heap-owned - `json_destroy` frees them. Always build cell values with
+`string_value` (which clones), never by wrapping a literal or borrowed slice.
 
 **Expecting `sql` to always return rows.** The `/sql` endpoint returns a JSON
 array for `SELECT` when the server honors the JSON format, but for DDL/DML it

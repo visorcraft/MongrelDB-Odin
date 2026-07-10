@@ -6,17 +6,19 @@ full-text, and more. Each condition type maps to one specialized index;
 conditions are AND-ed together.
 
 ```odin
-cond := mongreldb.json_object_make()
-mongreldb.json_object_set(&cond, "column", mongreldb.int_value(3))
-mongreldb.json_object_set(&cond, "min", mongreldb.float_value(100.0))
-mongreldb.json_object_set(&cond, "max", mongreldb.float_value(500.0))
+import m "mdb:mongreldb"
 
-mut qb := db.query("orders")
-defer mongreldb.free_query_builder(&qb)
-qb.where_("range_f64", cond)
-qb.projection({1, 2})
-qb.limit_(100)
-rows, err := qb.execute()
+cond := m.json_object_make()
+m.json_object_set(&cond, "column", m.int_value(3))
+m.json_object_set(&cond, "min", m.float_value(100.0))
+m.json_object_set(&cond, "max", m.float_value(500.0))
+
+qb := m.query(db, "orders")
+defer m.free_query_builder(&qb)
+m.where_(&qb, "range_f64", cond)
+m.projection(&qb, {1, 2})
+m.limit_(&qb, 100)
+rows, err := m.execute(&qb)
 ```
 
 This guide covers every condition type, projection, limits, combining
@@ -31,11 +33,11 @@ append zero or more conditions with `where_`, optionally set a projection and a
 limit, then call `execute`:
 
 ```odin
-mut qb := db.query("orders")
-defer mongreldb.free_query_builder(&qb)
-qb.where_(...)
-qb.limit_(100)
-rows, err := qb.execute()
+qb := m.query(db, "orders")
+defer m.free_query_builder(&qb)
+m.where_(&qb, ...)
+m.limit_(&qb, 100)
+rows, err := m.execute(&qb)
 ```
 
 The request body the builder produces matches the daemon's `/kit/query` shape:
@@ -61,23 +63,23 @@ array is flat: walk it in pairs to read values by column id.
 
 ```odin
 for row in rows {
-	obj, ok := row.(mongreldb.JSONObject)
+	obj, ok := row.(m.JSONObject)
 	if !ok do continue
-	cells_any, has := mongreldb.json_object_get(obj, "cells")
+	cells_any, has := m.json_object_get(obj, "cells")
 	if !has do continue
-	cells, ok := cells_any.(mongreldb.JSONArray)
+	cells, ok := cells_any.(m.JSONArray)
 	if !ok do continue
 
 	// Walk cells in [col_id, value] pairs.
 	i := 0
 	for i + 1 < len(cells) {
-		col_id, _ := cells[i].(mongreldb.JSONInteger)
+		col_id, _ := cells[i].(m.JSONInteger)
 		value := cells[i + 1]
 		switch v in value {
-		case mongreldb.JSONInteger: fmt.printf("col %lld = %lld\n", col_id, v)
-		case mongreldb.JSONFloat:   fmt.printf("col %lld = %g\n",   col_id, v)
-		case mongreldb.JSONString:  fmt.printf("col %lld = %s\n",  col_id, v)
-		case:                       fmt.printf("col %lld = ...\n", col_id)
+		case m.JSONInteger: fmt.printf("col %lld = %lld\n", col_id, v)
+		case m.JSONFloat:   fmt.printf("col %lld = %g\n",   col_id, v)
+		case m.JSONString:  fmt.printf("col %lld = %s\n",  col_id, v)
+		case:               fmt.printf("col %lld = ...\n", col_id)
 		}
 		i += 2
 	}
@@ -106,15 +108,15 @@ Column references use the numeric **column id**, never the column name.
 The fastest lookup. Supply the primary-key value as `value`.
 
 ```odin
-cond := mongreldb.json_object_make()
-mongreldb.json_object_set(&cond, "value", mongreldb.int_value(42))
-qb.where_("pk", cond)
+cond := m.json_object_make()
+m.json_object_set(&cond, "value", m.int_value(42))
+m.where_(&qb, "pk", cond)
 ```
 
 For a string PK, pass a `JSONString`:
 
 ```odin
-mongreldb.json_object_set(&cond, "value", mongreldb.string_value("user-42"))
+m.json_object_set(&cond, "value", m.string_value("user-42"))
 ```
 
 ### `range` / `range_f64` - numeric range (learned-range index)
@@ -123,17 +125,17 @@ Use `range` for integer columns and `range_f64` for float columns. Both bounds
 default to inclusive.
 
 ```odin
-cond := mongreldb.json_object_make()
-mongreldb.json_object_set(&cond, "column", mongreldb.int_value(3))
-mongreldb.json_object_set(&cond, "min", mongreldb.float_value(100.0))
-mongreldb.json_object_set(&cond, "max", mongreldb.float_value(500.0))
-qb.where_("range_f64", cond)
+cond := m.json_object_make()
+m.json_object_set(&cond, "column", m.int_value(3))
+m.json_object_set(&cond, "min", m.float_value(100.0))
+m.json_object_set(&cond, "max", m.float_value(500.0))
+m.where_(&qb, "range_f64", cond)
 
 // Open-ended: amount >= 100 (no max).
-open_cond := mongreldb.json_object_make()
-mongreldb.json_object_set(&open_cond, "column", mongreldb.int_value(3))
-mongreldb.json_object_set(&open_cond, "min", mongreldb.float_value(100.0))
-qb.where_("range_f64", open_cond)
+open_cond := m.json_object_make()
+m.json_object_set(&open_cond, "column", m.int_value(3))
+m.json_object_set(&open_cond, "min", m.float_value(100.0))
+m.where_(&qb, "range_f64", open_cond)
 ```
 
 To control inclusivity, pass `min_inclusive` / `max_inclusive` booleans.
@@ -143,22 +145,22 @@ To control inclusivity, pass `min_inclusive` / `max_inclusive` booleans.
 Best for low-cardinality columns (status, category, booleans).
 
 ```odin
-cond := mongreldb.json_object_make()
-mongreldb.json_object_set(&cond, "column", mongreldb.int_value(2))
-mongreldb.json_object_set(&cond, "value", mongreldb.string_value("Alice"))
-qb.where_("bitmap_eq", cond)
+cond := m.json_object_make()
+m.json_object_set(&cond, "column", m.int_value(2))
+m.json_object_set(&cond, "value", m.string_value("Alice"))
+m.where_(&qb, "bitmap_eq", cond)
 ```
 
 ### `is_null` / `is_not_null` - null checks
 
 ```odin
-is_null := mongreldb.json_object_make()
-mongreldb.json_object_set(&is_null, "column", mongreldb.int_value(3))
-qb.where_("is_null", is_null)
+is_null := m.json_object_make()
+m.json_object_set(&is_null, "column", m.int_value(3))
+m.where_(&qb, "is_null", is_null)
 
-not_null := mongreldb.json_object_make()
-mongreldb.json_object_set(&not_null, "column", mongreldb.int_value(3))
-qb.where_("is_not_null", not_null)
+not_null := m.json_object_make()
+m.json_object_set(&not_null, "column", m.int_value(3))
+m.where_(&qb, "is_not_null", not_null)
 ```
 
 ### `fm_contains` / `fm_contains_all` - full-text substring (FM-index)
@@ -167,10 +169,10 @@ Substring match within a column. The `value` alias is rewritten to the on-wire
 `pattern`.
 
 ```odin
-cond := mongreldb.json_object_make()
-mongreldb.json_object_set(&cond, "column", mongreldb.int_value(2))
-mongreldb.json_object_set(&cond, "value", mongreldb.string_value("database performance"))
-qb.where_("fm_contains", cond)
+cond := m.json_object_make()
+m.json_object_set(&cond, "column", m.int_value(2))
+m.json_object_set(&cond, "value", m.string_value("database performance"))
+m.where_(&qb, "fm_contains", cond)
 ```
 
 `fm_contains_all` requires every space-separated term to match; `fm_contains`
@@ -185,7 +187,7 @@ Pass a column-id array to `projection` to restrict the columns in each returned
 row. Projecting to only the columns you need cuts bandwidth and decode cost.
 
 ```odin
-qb.projection({1, 2}) // id and customer only
+m.projection(&qb, {1, 2}) // id and customer only
 ```
 
 ## Limit
@@ -195,8 +197,8 @@ flag in the raw response when more matches exist; the client surfaces rows
 only - check `len(rows)` against your limit to detect overflow.)
 
 ```odin
-qb.limit_(100)
-rows, _ := qb.execute()
+m.limit_(&qb, 100)
+rows, _ := m.execute(&qb)
 if len(rows) == 100 {
 	// Possibly more rows exist on the server; raise the limit or page with a
 	// range predicate on the PK.
@@ -210,16 +212,16 @@ the index results.
 
 ```odin
 // Customer is Alice AND amount is between 100 and 500.
-b := mongreldb.json_object_make()
-mongreldb.json_object_set(&b, "column", mongreldb.int_value(2))
-mongreldb.json_object_set(&b, "value", mongreldb.string_value("Alice"))
-qb.where_("bitmap_eq", b)
+b := m.json_object_make()
+m.json_object_set(&b, "column", m.int_value(2))
+m.json_object_set(&b, "value", m.string_value("Alice"))
+m.where_(&qb, "bitmap_eq", b)
 
-r := mongreldb.json_object_make()
-mongreldb.json_object_set(&r, "column", mongreldb.int_value(3))
-mongreldb.json_object_set(&r, "min", mongreldb.float_value(100.0))
-mongreldb.json_object_set(&r, "max", mongreldb.float_value(500.0))
-qb.where_("range_f64", r)
+r := m.json_object_make()
+m.json_object_set(&r, "column", m.int_value(3))
+m.json_object_set(&r, "min", m.float_value(100.0))
+m.json_object_set(&r, "max", m.float_value(500.0))
+m.where_(&qb, "range_f64", r)
 ```
 
 Because each condition targets a different specialized index, the engine can
@@ -230,24 +232,24 @@ pick the most selective one to drive the lookup and intersect the rest.
 A realistic combined lookup - bitmap equality + range + projection + limit:
 
 ```odin
-top_spenders :: proc(db: mongreldb.Client, table, customer: string) {
-	mut qb := db.query(table)
-	defer mongreldb.free_query_builder(&qb)
+top_spenders :: proc(db: m.Client, table, customer: string) {
+	qb := m.query(db, table)
+	defer m.free_query_builder(&qb)
 
-	b := mongreldb.json_object_make()
-	mongreldb.json_object_set(&b, "column", mongreldb.int_value(2))
-	mongreldb.json_object_set(&b, "value", mongreldb.string_value(customer))
-	qb.where_("bitmap_eq", b)
+	b := m.json_object_make()
+	m.json_object_set(&b, "column", m.int_value(2))
+	m.json_object_set(&b, "value", m.string_value(customer))
+	m.where_(&qb, "bitmap_eq", b)
 
-	r := mongreldb.json_object_make()
-	mongreldb.json_object_set(&r, "column", mongreldb.int_value(3))
-	mongreldb.json_object_set(&r, "min", mongreldb.float_value(100.0))
-	qb.where_("range_f64", r)
+	r := m.json_object_make()
+	m.json_object_set(&r, "column", m.int_value(3))
+	m.json_object_set(&r, "min", m.float_value(100.0))
+	m.where_(&qb, "range_f64", r)
 
-	qb.projection({1, 3})
-	qb.limit_(50)
+	m.projection(&qb, {1, 3})
+	m.limit_(&qb, 50)
 
-	rows, err := qb.execute()
+	rows, err := m.execute(&qb)
 	if err != .None_ do return
 	_ = rows
 	// ... read rows ...

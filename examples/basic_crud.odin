@@ -1,9 +1,9 @@
 // Example: basic CRUD operations with the MongrelDB Odin client.
 //
-// Build and run from the repo root (the `mongreldb` collection points the
-// import at the library sources in src/):
+// Build and run from the repo root (the `mdb` collection points the
+// import at the `mongreldb/` package directory):
 //
-//   odin run examples/basic_crud.odin -file -collection:mongreldb=src
+//   odin run examples/basic_crud.odin -file -collection:mdb=.
 //
 // Requires a mongreldb-server daemon running on http://127.0.0.1:8453.
 //
@@ -16,7 +16,7 @@ package basic_crud
 import "core:fmt"
 import "core:os"
 
-import m "mongreldb"
+import m "mdb:mongreldb"
 
 URL :: "http://127.0.0.1:8453"
 

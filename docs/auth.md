@@ -26,11 +26,13 @@ Connect with `Options.token`. The token is sent as `Authorization: Bearer ...`
 on every request.
 
 ```odin
-db := mongreldb.connect("http://127.0.0.1:8453", mongreldb.Options{
+import m "mdb:mongreldb"
+
+db := m.connect("http://127.0.0.1:8453", m.Options{
 	token = "s3cret-token",
 })
 
-ok, err := db.health()
+ok, err := m.health(db)
 if err == .Auth {
 	fmt.eprintln("bad or missing token")
 	return
@@ -46,12 +48,12 @@ Hard-coding secrets in source is bad practice. Read it from the environment:
 ```odin
 import "core:os"
 
-token, found := os.lookup_env("MONGRELDB_TOKEN")
-if !found || token == "" {
+token := os.get_env_alloc("MONGRELDB_TOKEN", context.allocator)
+if token == "" {
 	fmt.eprintln("MONGRELDB_TOKEN not set")
 	return
 }
-db := mongreldb.connect("http://127.0.0.1:8453", mongreldb.Options{token = token})
+db := m.connect("http://127.0.0.1:8453", m.Options{token = token})
 ```
 
 ## Basic auth mode
@@ -65,7 +67,7 @@ mongreldb-server --auth-users
 Connect with `Options.username` / `Options.password`:
 
 ```odin
-db := mongreldb.connect("http://127.0.0.1:8453", mongreldb.Options{
+db := m.connect("http://127.0.0.1:8453", m.Options{
 	username = "admin",
 	password = "s3cret",
 })
@@ -94,7 +96,7 @@ are managed with SQL. Run these statements through `sql`.
 ### Create a user
 
 ```odin
-_, _ = db.sql("CREATE USER alice WITH PASSWORD 'hunter2'")
+_, _ = m.sql(db, "CREATE USER alice WITH PASSWORD 'hunter2'")
 ```
 
 ### Alter a user
@@ -102,13 +104,13 @@ _, _ = db.sql("CREATE USER alice WITH PASSWORD 'hunter2'")
 Change a password:
 
 ```odin
-_, _ = db.sql("ALTER USER alice WITH PASSWORD 'new-password'")
+_, _ = m.sql(db, "ALTER USER alice WITH PASSWORD 'new-password'")
 ```
 
 Grant the admin role:
 
 ```odin
-_, _ = db.sql("ALTER USER alice ADMIN")
+_, _ = m.sql(db, "ALTER USER alice ADMIN")
 ```
 
 `ALTER USER ... ADMIN` is how you promote a user to full administrative
@@ -117,17 +119,17 @@ privileges (table creation/drop, compaction, user management). Use it sparingly.
 ### Drop a user
 
 ```odin
-_, _ = db.sql("DROP USER alice")
+_, _ = m.sql(db, "DROP USER alice")
 ```
 
 ### Roles and grants
 
 ```odin
-_, _ = db.sql("CREATE ROLE analyst")
-_, _ = db.sql("GRANT SELECT ON orders TO analyst")
-_, _ = db.sql("GRANT analyst TO alice")
-_, _ = db.sql("REVOKE SELECT ON orders FROM analyst")
-_, _ = db.sql("DROP ROLE analyst")
+_, _ = m.sql(db, "CREATE ROLE analyst")
+_, _ = m.sql(db, "GRANT SELECT ON orders TO analyst")
+_, _ = m.sql(db, "GRANT analyst TO alice")
+_, _ = m.sql(db, "REVOKE SELECT ON orders FROM analyst")
+_, _ = m.sql(db, "DROP ROLE analyst")
 ```
 
 Exact grant syntax mirrors the server's SQL flavor; consult the server's SQL

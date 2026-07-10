@@ -557,7 +557,7 @@ strconv_parse_f64 :: proc(s: string) -> (f64, bool) {
 // math_pow10 returns 10^exp as an f64.
 math_pow10 :: proc(exp: int) -> f64 {
 	r: f64 = 1.0
-	for k in 0..<exp {
+	for _ in 0..<exp {
 		r *= 10.0
 	}
 	return r

@@ -4,7 +4,9 @@ MongrelDB ships a DataFusion-backed SQL engine at `POST /sql`. From Odin, run
 SQL with `sql`:
 
 ```odin
-rows, err := db.sql("SELECT 1")
+import m "mdb:mongreldb"
+
+rows, err := m.sql(db, "SELECT 1")
 ```
 
 This guide covers the SQL surface - DDL, DML, `CREATE TABLE AS SELECT`,
@@ -35,7 +37,7 @@ Errors are mapped to the same `Mongrel_Error` values as everything else: an HTTP
 [errors.md](errors.md).
 
 ```odin
-_, err := db.sql(
+_, err := m.sql(db,
 	"INSERT INTO orders (id, customer, amount) VALUES (99, 'Zoe', 999.0)")
 if err == .Conflict {
 	fmt.eprintln("duplicate row")
@@ -48,7 +50,7 @@ Define a table in SQL instead of via `create_table`. Column ids are assigned by
 the server when not stated.
 
 ```odin
-_, _ = db.sql(
+_, _ = m.sql(db,
 	"CREATE TABLE products (" +
 	"  id INT64 PRIMARY KEY," +
 	"  name VARCHAR," +
@@ -60,10 +62,10 @@ _, _ = db.sql(
 ## INSERT
 
 ```odin
-_, _ = db.sql(
+_, _ = m.sql(db,
 	"INSERT INTO products (id, name, price, category, in_stock) " +
 	"VALUES (1, 'Widget', 9.99, 'tools', true)")
-_, _ = db.sql(
+_, _ = m.sql(db,
 	"INSERT INTO products VALUES (2, 'Gadget', 19.99, 'tools', true)")
 ```
 
@@ -73,22 +75,22 @@ because it stages ops in one round trip without re-parsing SQL.
 ## UPDATE
 
 ```odin
-_, _ = db.sql("UPDATE products SET price = 14.99 WHERE id = 1")
-_, _ = db.sql("UPDATE orders SET amount = 200.0 WHERE customer = 'Bob'")
+_, _ = m.sql(db, "UPDATE products SET price = 14.99 WHERE id = 1")
+_, _ = m.sql(db, "UPDATE orders SET amount = 200.0 WHERE customer = 'Bob'")
 ```
 
 ## DELETE
 
 ```odin
-_, _ = db.sql("DELETE FROM products WHERE in_stock = false")
-_, _ = db.sql("DELETE FROM products WHERE id = 2")
+_, _ = m.sql(db, "DELETE FROM products WHERE in_stock = false")
+_, _ = m.sql(db, "DELETE FROM products WHERE id = 2")
 ```
 
 ## SELECT
 
 ```odin
-rows, _ := db.sql("SELECT id, name FROM products WHERE category = 'tools' ORDER BY price")
-rows, _ = db.sql("SELECT category, COUNT(*) AS n FROM products GROUP BY category")
+rows, _ := m.sql(db, "SELECT id, name FROM products WHERE category = 'tools' ORDER BY price")
+rows, _ = m.sql(db, "SELECT category, COUNT(*) AS n FROM products GROUP BY category")
 ```
 
 Each returned row is a `JSONValue` object keyed by column name. Read a field
@@ -96,11 +98,11 @@ with `json_object_get`:
 
 ```odin
 for row in rows {
-	obj, ok := row.(mongreldb.JSONObject)
+	obj, ok := row.(m.JSONObject)
 	if !ok do continue
-	name_any, has := mongreldb.json_object_get(obj, "name")
+	name_any, has := m.json_object_get(obj, "name")
 	if has {
-		name, _ := name_any.(mongreldb.JSONString)
+		name, _ := name_any.(m.JSONString)
 		fmt.printf("name = %s\n", name)
 	}
 }
@@ -117,10 +119,10 @@ denormalized aggregates.
 
 ```odin
 // Snapshot all high-value orders into a new table.
-_, _ = db.sql("CREATE TABLE archive AS SELECT * FROM orders WHERE amount > 500")
+_, _ = m.sql(db, "CREATE TABLE archive AS SELECT * FROM orders WHERE amount > 500")
 
 // Roll up sales by customer.
-_, _ = db.sql(
+_, _ = m.sql(db,
 	"CREATE TABLE sales_by_customer AS " +
 	"SELECT customer, SUM(amount) AS total FROM orders GROUP BY customer")
 ```
@@ -135,7 +137,7 @@ hierarchy/graph traversal.
 
 ```odin
 // Generate the numbers 1..10.
-_, _ = db.sql(
+_, _ = m.sql(db,
 	"WITH RECURSIVE r(n) AS (" +
 	"  SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 10" +
 	") SELECT n FROM r")
@@ -144,7 +146,7 @@ _, _ = db.sql(
 A common practical example is walking an adjacency list:
 
 ```odin
-_, _ = db.sql(
+_, _ = m.sql(db,
 	"WITH RECURSIVE descendants(id) AS (" +
 	"  SELECT id FROM categories WHERE id = 1" +
 	"  UNION ALL" +
@@ -159,13 +161,13 @@ collapsing rows. Useful for top-N-per-group, running totals, and row numbers.
 
 ```odin
 // Row number within each customer, ordered by amount descending.
-_, _ = db.sql(
+_, _ = m.sql(db,
 	"SELECT id, customer, amount, " +
 	"ROW_NUMBER() OVER (PARTITION BY customer ORDER BY amount DESC) AS rn " +
 	"FROM orders")
 
 // Running total per customer.
-_, _ = db.sql(
+_, _ = m.sql(db,
 	"SELECT id, customer, amount, " +
 	"SUM(amount) OVER (PARTITION BY customer ORDER BY id) AS running_total " +
 	"FROM orders")

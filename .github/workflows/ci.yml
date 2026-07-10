@@ -34,29 +34,33 @@ jobs:
         run: odin version
 
       - name: Build library (warning-clean, vetted)
-        # `odin build` on any source file in the collection compiles the whole
-        # package it belongs to; `-vet` lints and `-strict-style` keeps the
-        # style machine-checked. `-collection:mongreldb=src` makes
-        # `import "mongreldb"` resolve to the library sources.
+        # The library lives in the `mongreldb/` directory as `package mongreldb`.
+        # `odin build mongreldb` compiles the whole package; `-vet` lints and
+        # `-strict-style` keeps the style machine-checked.
         run: |
-          odin build src/mongreldb.odin -collection:mongreldb=src \
+          odin build mongreldb -build-mode:lib \
             -out:build/lib_check -vet -strict-style
 
       - name: Build examples
+        # Examples are single-file packages (`-file`) that import the library
+        # via the `mdb` collection, which points at the repo root so the bare
+        # `mongreldb` package directory resolves: `-collection:mdb=.`
         run: |
           for ex in examples/*.odin; do
             name=$(basename "$ex" .odin)
             echo "=== Building $ex ==="
-            odin build "$ex" -file -collection:mongreldb=src \
+            odin build "$ex" -file -collection:mdb=. \
               -out:build/"$name" -vet -strict-style
           done
 
       - name: Run offline tests (wire-shape; live tests self-skip)
-        # `odin test` discovers and runs every `@(test)` proc in the package.
-        # Without a daemon the live tests short-circuit (return early), so only
-        # the pure wire-shape conformance tests actually assert here.
+        # `odin test tests` discovers and runs every `@(test)` proc in the
+        # `mongreldb_test` package. Without a daemon the live tests
+        # short-circuit (return early), so only the pure wire-shape conformance
+        # tests actually assert here.
         run: |
-          odin test tests -collection:mongreldb=src -vet -strict-style
+          odin test tests -collection:mdb=. -vet -strict-style \
+            -define:ODIN_TEST_THREADS=4
 
   live:
     # Boots a real mongreldb-server and runs the full live round-trip suite.
@@ -88,7 +92,7 @@ jobs:
           for ex in examples/*.odin; do
             name=$(basename "$ex" .odin)
             echo "=== Building $ex ==="
-            odin build "$ex" -file -collection:mongreldb=src \
+            odin build "$ex" -file -collection:mdb=. \
               -out:build/"$name" -vet -strict-style
           done
 
@@ -125,7 +129,8 @@ jobs:
 
       - name: Run live test suite
         run: |
-          odin test tests -collection:mongreldb=src -vet -strict-style
+          odin test tests -collection:mdb=. -vet -strict-style \
+            -define:ODIN_TEST_THREADS=4
 
       - name: Run examples
         run: |

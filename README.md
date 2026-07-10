@@ -21,7 +21,7 @@
 
 | Surface | Package | Install |
 |---|---|---|
-| Odin client | `mongreldb` | drop `src/` into a collection named `mongreldb` |
+| Odin client | `mongreldb` | copy the `mongreldb/` directory into your project, or add it as a git submodule |
 
 ## Requirements
 
@@ -56,7 +56,7 @@ Task-focused, commented guides live in [`docs/`](docs):
 package main
 
 import "core:fmt"
-import m "mongreldb"
+import m "mdb:mongreldb"
 
 main :: proc() {
 	// Connect to a running mongreldb-server daemon.
@@ -114,10 +114,10 @@ range_for :: proc(id: i64, lo, hi: f64) -> m.JSONObject {
 
 ```odin
 // Bearer token (--auth-token mode)
-db := mongreldb.connect("http://127.0.0.1:8453", mongreldb.Options{token = "my-secret-token"})
+db := m.connect("http://127.0.0.1:8453", m.Options{token = "my-secret-token"})
 
 // HTTP Basic (--auth-users mode)
-db := mongreldb.connect("http://127.0.0.1:8453", mongreldb.Options{
+db := m.connect("http://127.0.0.1:8453", m.Options{
 	username = "admin",
 	password = "s3cret",
 })
@@ -266,18 +266,18 @@ case:              fmt.eprintf("query/server error: %s\n", m.mongrel_error_strin
 
 ## Building and testing
 
-Odin has no package manager; the library is a set of source files in `src/`. Import it by registering a collection named `mongreldb` pointing at `src/`:
+Odin has no package manager; the library is the `mongreldb/` directory (the package is declared as `package mongreldb`). Examples and tests import it through a collection named `mdb` that points at the repo root, so `import "mdb:mongreldb"` resolves to the `mongreldb/` directory:
 
 ```sh
 # Build the library alone (compiles the whole package).
-odin build src/mongreldb.odin -collection:mongreldb=src -vet
+odin build mongreldb -build-mode:lib -vet
 
 # Run the test suite (`odin test` discovers every @(test) proc).
 # Live tests self-skip without a daemon; the wire-shape tests always run.
-odin test tests -collection:mongreldb=src -vet
+odin test tests -collection:mdb=. -vet
 
 # Build and run an example (each example is its own package; use -file).
-odin run examples/basic_crud.odin -file -collection:mongreldb=src -out:bin/basic_crud
+odin run examples/basic_crud.odin -file -collection:mdb=. -out:bin/basic_crud
 ./bin/basic_crud
 ```
 
@@ -294,12 +294,18 @@ chmod +x bin/mongreldb-server
 
 ### Using the client in your project
 
-Copy `src/` (the three `.odin` files) into a directory in your project and register it as the `mongreldb` collection, or add this repo as a git submodule and point the collection at it:
+Copy the `mongreldb/` directory (the three `.odin` files) into your project, or add this repo as a git submodule, then point a collection at the directory that *contains* `mongreldb/` so the package resolves:
 
 ```sh
-git submodule add https://github.com/visorcraft/MongrelDB-Odin.git vendor/mongreldb
-# then build with:
-odin build your_app.odin -collection:mongreldb=vendor/mongreldb/src
+git submodule add https://github.com/visorcraft/MongrelDB-Odin.git vendor
+# then build with (the collection points at the parent of mongreldb/):
+odin build your_app.odin -collection:mdb=vendor
+```
+
+In your code, import the package through the collection:
+
+```odin
+import m "mdb:mongreldb"
 ```
 
 ## Contributing

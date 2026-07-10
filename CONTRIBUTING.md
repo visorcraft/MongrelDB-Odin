@@ -49,19 +49,17 @@ Run the full CI preflight locally (requires Odin and libcurl-dev):
 
 ```sh
 # Build the library warning-clean.
-odin build src/mongreldb.odin -collection:mongreldb=src -vet -strict-style
+odin build mongreldb -build-mode:lib -vet -strict-style
 
-# Build the test binary and examples.
-odin build tests/mongreldb_live_test.odin -collection:mongreldb=src \
-    -out:build/mongreldb_live_test -vet -strict-style
+# Build the examples (each is a single-file package; use -file).
 for ex in examples/*.odin; do
   name=$(basename "$ex" .odin)
-  odin build "$ex" -collection:mongreldb=src -out:build/"$name" -vet -strict-style
+  odin build "$ex" -file -collection:mdb=. -out:build/"$name" -vet -strict-style
 done
 
 # Run the suite. The live tests self-skip without a daemon; the wire-shape
 # test always runs.
-./build/mongreldb_live_test
+odin test tests -collection:mdb=. -vet -strict-style
 ```
 
 All steps must pass warning-clean under `-vet -strict-style`. If a check fails,
@@ -70,7 +68,7 @@ fix the root cause - don't silence the compiler or skip the test.
 To run the live integration suite against a running `mongreldb-server`:
 
 ```sh
-MONGRELDB_URL=http://127.0.0.1:8453 ./build/mongreldb_live_test
+MONGRELDB_URL=http://127.0.0.1:8453 odin test tests -collection:mdb=.
 ```
 
 Live tests self-skip when no server is reachable.

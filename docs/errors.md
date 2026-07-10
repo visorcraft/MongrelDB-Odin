@@ -31,6 +31,10 @@ variant (handy for logging). The daemon's structured error code is not decoded
 separately by the client; it is part of the response body, which is not surfaced
 on the error path. Branch on the category.
 
+Throughout this guide the client is imported as `import m "mdb:mongreldb"` and
+all calls use the free-function form (e.g. `m.schema_for(db, ...)`,
+`m.mongrel_error_string(err)`).
+
 ## Error variant reference
 
 | Variant | Meaning | Typical cause |
@@ -91,14 +95,14 @@ branch on the variant and correlate with server logs when you need the detail.
 `switch` on the returned error:
 
 ```odin
-_, err := db.schema_for("missing_table")
+_, err := m.schema_for(db, "missing_table")
 switch err {
 case .None_:       // ok
 case .Not_Found:   fmt.eprintln("table does not exist")
 case .Conflict:    fmt.eprintln("unexpected conflict on a read")
 case .Auth:        fmt.eprintln("bad credentials")
-case .Query:       fmt.eprintf("server error: %s\n", mongreldb.mongrel_error_string(err))
-case .Http:        fmt.eprintf("can't reach daemon: %s\n", mongreldb.mongrel_error_string(err))
+case .Query:       fmt.eprintf("server error: %s\n", m.mongrel_error_string(err))
+case .Http:        fmt.eprintf("can't reach daemon: %s\n", m.mongrel_error_string(err))
 }
 ```
 
@@ -146,7 +150,7 @@ transaction is safe (see [transactions.md](transactions.md)).
 
 ```odin
 for attempt in 0..<3 {
-	results, err = txn.commit("stable-key")
+	results, err = m.commit(&txn, "stable-key")
 	if err == .None_ { break }
 	if err == .Auth || err == .Conflict { break } // not transient
 	// sleep and retry
@@ -182,7 +186,7 @@ if err == .Response_Too_Large { /* ... */ }
 if err == .Already_Committed { /* ... */ }
 
 // Human-readable label:
-label := mongreldb.mongrel_error_string(err)
+label := m.mongrel_error_string(err)
 ```
 
 ## Next steps
