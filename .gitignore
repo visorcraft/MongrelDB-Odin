@@ -1,0 +1,33 @@
+# Odin build output
+*.exe
+*.o
+*.obj
+*.so
+*.so.*
+*.dylib
+*.dll
+*.lib
+*.wasm
+
+# Odin intermediate / cache directories
+build/
+bin/
+.cache/
+
+# Logs (e.g. mongreldb-server output captured by tests)
+*.log
+
+# OS and editor state
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Workspace-local agent instruction files are never published.
+AGENTS.md
+CLAUDE.md
+.cursorrules
+.zcode/
