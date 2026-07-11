@@ -47,7 +47,12 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/odin-lang/Odin.git /opt/odin
           (cd /opt/odin && ./build_odin.sh release)
-          echo "/opt/odin" >> $GITHUB_PATH
+          # The Odin binary links libLLVM-18.so with rpath=$ORIGIN; expose the
+          # LLVM 18 lib dir to the dynamic loader, and put the LLVM 18 bin dir
+          # (lld/opt/llc) plus Odin itself on PATH for every subsequent step.
+          echo "LD_LIBRARY_PATH=/usr/lib/llvm-18/lib" >> "$GITHUB_ENV"
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+          echo "/opt/odin" >> "$GITHUB_PATH"
 
       - name: Print Odin version
         run: odin version
@@ -121,7 +126,12 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/odin-lang/Odin.git /opt/odin
           (cd /opt/odin && ./build_odin.sh release)
-          echo "/opt/odin" >> $GITHUB_PATH
+          # The Odin binary links libLLVM-18.so with rpath=$ORIGIN; expose the
+          # LLVM 18 lib dir to the dynamic loader, and put the LLVM 18 bin dir
+          # (lld/opt/llc) plus Odin itself on PATH for every subsequent step.
+          echo "LD_LIBRARY_PATH=/usr/lib/llvm-18/lib" >> "$GITHUB_ENV"
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+          echo "/opt/odin" >> "$GITHUB_PATH"
 
       - name: Print Odin version
         run: odin version
