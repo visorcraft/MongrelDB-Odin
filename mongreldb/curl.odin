@@ -46,6 +46,8 @@ CURLOPT_HTTPHEADER :: i32(10023)
 CURLOPT_CUSTOMREQUEST :: i32(10036)
 CURLOPT_FOLLOWLOCATION :: i32(10052)
 CURLOPT_HEADER :: i32(10058)
+CURLOPT_TIMEOUT :: i32(13)         // max seconds for the whole transfer
+CURLOPT_CONNECTTIMEOUT :: i32(78)  // max seconds for the connection phase
 
 // CURLINFO response code info.
 CURLINFO_RESPONSE_CODE :: u32(0x200002)
@@ -227,6 +229,12 @@ curl_perform :: proc(
 	// client maps 3xx to a transport error category).
 	_ = easy_setopt(handle, CURLOPT_HEADER, 0)
 	_ = easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0)
+
+	// Timeouts: cap the connection phase and the whole transfer so a missing
+	// or stalled daemon cannot hang the caller indefinitely (curl's default
+	// timeout is 0 = forever).
+	_ = easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 10)
+	_ = easy_setopt(handle, CURLOPT_TIMEOUT, 30)
 
 	rc := easy_perform(handle)
 	if rc != CURLE_OK { return nil, 0, false }
