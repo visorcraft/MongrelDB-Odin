@@ -203,7 +203,9 @@ You should see a row count of 1.
 | `create_table(db, name, cols)` | POST `/kit/create_table`. Column `id`s are the on-wire identifiers; use them everywhere else. |
 | `create_table_with_constraints(db, name, cols, constraints)` | Same request with a top-level engine constraints JSON object, such as `checks`. |
 | `col.has_enum / enum_variants` | Optional. Constrains a text column to a fixed value set; server-enforced on commit, surfaces as `.Conflict` on a row outside the set. Absent when `has_enum` is false. |
-| `col.has_default / default_value` | Optional. Default value string for the column. Absent when `has_default` is false. The server's `default_expr` field name is also accepted. |
+| `col.has_default / default_value` | Optional string default. The server's `default_expr` field name is also accepted. |
+| `col.has_default_scalar / default_scalar` | Optional JSON scalar default for numeric, boolean, or null values. Sent as `default_value`. |
+| `col.has_default_expr / default_expr` | Dynamic `now` or `uuid` default. Takes precedence over scalar and string defaults. |
 | `put(db, table, cells, key)` | Single-op transaction: POST `/kit/txn` with one `put` op. `cells` is flattened to `[col_id, val, ...]`. |
 | `query(db, table) + where_` | Builds a `/kit/query` body. Conditions push down to native indexes. |
 | `count(db, table)` | GET `/tables/{name}/count`. |
@@ -217,7 +219,9 @@ schemas that don't set them produce an identical payload.
 | Field | Type | Effect |
 |-------|------|--------|
 | `has_enum` + `enum_variants` | `bool` + `[dynamic]string` | Restrict the column to one of the listed string values. The engine rejects writes outside the set with `.Conflict`. |
-| `has_default` + `default_value` | `bool` + `string` | Default value applied when the cell is omitted on a `put`. Sent as a raw string and coerced server-side per the column's `ty`. |
+| `has_default` + `default_value` | `bool` + `string` | String default applied when the cell is omitted on a `put`. |
+| `has_default_scalar` + `default_scalar` | `bool` + `JSONValue` | Non-string JSON scalar default. Caller must supply the scalar type expected by the column. Takes precedence over `default_value`. |
+| `has_default_expr` + `default_expr` | `bool` + `string` | Dynamic `now` or `uuid`. Takes precedence over both static fields. |
 
 Both fields compose. A column can be a plain string, an enum-only string, a
 string with a default, or an enum with a default:

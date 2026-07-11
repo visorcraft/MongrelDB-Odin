@@ -100,6 +100,41 @@ column_to_json_omits_empty_enum :: proc(t: ^testing.T) {
 }
 
 @(test)
+column_to_json_emits_numeric_default :: proc(t: ^testing.T) {
+	col := m.Column{
+		id = 4,
+		name = "retries",
+		ty = "int64",
+		has_default_scalar = true,
+		default_scalar = m.int_value(3),
+	}
+	s := m.column_to_json_string(col)
+	defer m.free_string(s)
+	testing.expectf(t, contains(s, "\"default_value\":3"),
+		"expected numeric default_value, got %s", s)
+}
+
+@(test)
+column_to_json_emits_dynamic_default_expr :: proc(t: ^testing.T) {
+	col := m.Column{
+		id = 5,
+		name = "created_at",
+		ty = "timestamp",
+		has_default = true,
+		default_value = "legacy",
+		has_default_scalar = true,
+		default_scalar = m.int_value(3),
+		has_default_expr = true,
+		default_expr = "now",
+	}
+	s := m.column_to_json_string(col)
+	defer m.free_string(s)
+	testing.expectf(t, contains(s, "\"default_expr\":\"now\""),
+		"expected dynamic default_expr, got %s", s)
+	testing.expect(t, !contains(s, "default_value"))
+}
+
+@(test)
 create_table_payload_emits_constraints :: proc(t: ^testing.T) {
 	// The constraints branch must survive payload construction even when the
 	// object carries a real checks array. The HTTP path uses the same helper.

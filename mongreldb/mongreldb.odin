@@ -96,6 +96,11 @@ Column :: struct {
 	enum_variants: [dynamic]string,
 	has_default:   bool,
 	default_value: string,
+	// default_scalar sends a non-string JSON scalar as default_value.
+	has_default_scalar: bool,
+	default_scalar:     JSONValue,
+	has_default_expr: bool,
+	default_expr:     string,
 }
 
 // Options configures a `Client`.
@@ -722,7 +727,11 @@ column_to_value :: proc(c: Column, allocator := context.allocator) -> JSONValue 
 		for v in c.enum_variants { append(&arr, jstr(v, allocator)) }
 		json_object_set(&obj, "enum_variants", arr)
 	}
-	if c.has_default && c.default_value != "" {
+	if c.has_default_expr && c.default_expr != "" {
+		json_object_set(&obj, "default_expr", jstr(c.default_expr, allocator))
+	} else if c.has_default_scalar {
+		json_object_set(&obj, "default_value", c.default_scalar)
+	} else if c.has_default && c.default_value != "" {
 		json_object_set(&obj, "default_value", jstr(c.default_value, allocator))
 	}
 	return obj
