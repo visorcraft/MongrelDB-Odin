@@ -158,7 +158,8 @@ main :: proc() {
 		{3, m.float_value(99.5)},
 		{4, m.string_value("active")},
 	}
-	_, perr := m.put(db, "orders", r1, "")
+	pres, perr := m.put(db, "orders", r1, "")
+	defer m.json_destroy(pres)
 	if perr != .None_ {
 		fmt.eprintf("put: %s\n", m.mongrel_error_string(perr))
 		return
@@ -167,12 +168,14 @@ main :: proc() {
 	// 5. Query with a native index condition. The range index serves this in
 	//    sub-millisecond.
 	cond := m.json_object_make()
+	defer m.json_object_destroy(cond)
 	m.json_object_set(&cond, "column", m.int_value(3))
 	m.json_object_set(&cond, "min", m.float_value(50.0))
 	qb := m.query(db, "orders")
 	defer m.free_query_builder(&qb)
 	m.where_(&qb, "range_f64", cond)
 	rows, qerr := m.execute(&qb)
+	defer free_rows(rows)
 	if qerr != .None_ {
 		fmt.eprintf("query: %s\n", m.mongrel_error_string(qerr))
 		return
@@ -190,6 +193,11 @@ main :: proc() {
 		return
 	}
 	fmt.printf("history retention epochs: %d\n", window)
+}
+
+free_rows :: proc(rows: []m.JSONValue) {
+	for row in rows { m.json_destroy(row) }
+	m.free_slice(rows)
 }
 ```
 

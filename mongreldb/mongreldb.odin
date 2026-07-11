@@ -83,9 +83,9 @@ Cell :: struct {
 
 // Column describes one column in a CREATE TABLE request. It is serialized
 // verbatim; the recognized keys are `id`, `name`, `ty`, `primary_key`,
-// `nullable`, `enum_variants`, and `default_value`, matching the daemon's
-// table-create extractor. `enum_variants` and `default_value` are optional and
-// only emitted when their `has_*` flag is set.
+// `nullable`, `enum_variants`, `default_value`, `default_scalar`, and
+// `default_expr`, matching the daemon's table-create extractor. The optional
+// fields are only emitted when their `has_*` flag is set.
 Column :: struct {
 	id:            i64,
 	name:          string,
@@ -103,7 +103,9 @@ Column :: struct {
 	default_expr:     string,
 }
 
-// Options configures a `Client`.
+// Options configures a `Client`. The strings are borrowed, not cloned: any
+// caller-supplied token/username/password must outlive the `Client` created
+// from these options.
 Options :: struct {
 	// token authenticates requests with a Bearer token (--auth-token mode).
 	// When set, it takes precedence over basic-auth credentials.
@@ -115,6 +117,8 @@ Options :: struct {
 }
 
 // Client is the MongrelDB HTTP client. Create one with `connect`.
+// The client borrows its strings from the caller; keep them alive as long
+// as the client is in use.
 Client :: struct {
 	base_url: string,
 	token:    string,
@@ -124,7 +128,8 @@ Client :: struct {
 
 // connect returns a `Client` for the daemon at `base_url`. If `base_url`
 // is empty, `default_base_url` is used. The base URL has any trailing slash
-// trimmed.
+// trimmed. `base_url` and the strings in `options` are borrowed, not cloned;
+// they must outlive the returned Client.
 connect :: proc(base_url: string, options: Options) -> Client {
 	url := default_base_url
 	if base_url != "" {
@@ -178,8 +183,10 @@ earliest_retained_epoch :: proc(db: Client, allocator := context.allocator) -> (
 }
 
 // history_retention_payload builds the PUT body for set_history_retention_epochs.
-// Exposed for wire-shape tests.
+// Exposed for wire-shape tests. The wire format uses a signed i64; values larger
+// than max(i64) cannot be represented and trigger a runtime assert.
 history_retention_payload :: proc(epochs: u64, allocator := context.allocator) -> JSONObject {
+	assert(epochs <= u64(max(i64)), "history retention epochs overflow i64")
 	payload := json_object_make(allocator)
 	json_object_set(&payload, "history_retention_epochs", int_value(i64(epochs)))
 	return payload
@@ -195,12 +202,13 @@ parse_history_retention :: proc(value: JSONValue) -> (History_Retention, Mongrel
 	hi, hiok := h.(JSONInteger)
 	ei, eiok := e.(JSONInteger)
 	if !hok || !eok || !hiok || !eiok { return {}, .Json }
+	if hi < 0 || ei < 0 { return {}, .Json }
 	return {u64(hi), u64(ei)}, .None_
 }
 
 set_history_retention_epochs :: proc(db: Client, epochs: u64, allocator := context.allocator) -> (History_Retention, Mongrel_Error) {
 	payload := history_retention_payload(epochs, allocator)
-	defer json_object_destroy(payload)
+	defer json_object_destroy(payload, allocator)
 	body, err := raw_request(db, allocator, .PUT, "/history/retention", payload)
 	if err != .None_ { return {}, err }
 	defer free_slice(body, allocator)
@@ -225,8 +233,13 @@ table_names :: proc(db: Client, allocator := context.allocator) -> ([]string, Mo
 	out := make([dynamic]string, 0, len(arr), allocator)
 	for item in arr {
 		s, sok := item.(JSONString)
-		if !sok { free_dyn(out); return nil, .Json }
-		append(&out, s)
+		if !sok {
+			for prev in out { free_string(prev, allocator) }
+			free_dyn(out)
+			return nil, .Json
+		}
+		cloned, _ := strings.clone(string(s), allocator)
+		append(&out, cloned)
 	}
 	return out[:], .None_
 }
@@ -264,7 +277,13 @@ create_table_payload :: proc(name: string, columns: []Column, constraints: JSONV
 create_table_impl :: proc(db: Client, name: string, columns: []Column, constraints: JSONValue, include_constraints: bool, allocator: mem.Allocator) -> (i64, Mongrel_Error) {
 	obj, cols := create_table_payload(name, columns, constraints, include_constraints, allocator)
 	defer json_destroy(JSONArray(cols), allocator)
-	defer json_object_destroy(obj)
+	defer json_object_destroy(obj, allocator)
+	// The cloned table name is owned by obj; json_object_destroy does not free
+	// nested values, so free it explicitly after the request is sent.
+	defer {
+		name_v, _ := json_object_get(obj, "name")
+		if s, ok := name_v.(JSONString); ok { free_string(string(s), allocator) }
+	}
 	payload := obj
 
 	body, err := raw_request(db, allocator, .POST, "/kit/create_table", payload)
@@ -286,10 +305,11 @@ create_table_impl :: proc(db: Client, name: string, columns: []Column, constrain
 
 // drop_table drops a table by name.
 drop_table :: proc(db: Client, name: string, allocator := context.allocator) -> Mongrel_Error {
+	context.allocator = allocator
 	escaped := url_path_escape(name, allocator)
 	defer if escaped != name { free_string(escaped, allocator) }
-	path := fmt.tprintf("/tables/%s", escaped)
-	defer free_string(path)
+	path := fmt.aprintf("/tables/%s", escaped)
+	defer free_string(path, allocator)
 	body, err := raw_request(db, allocator, .DELETE, path, nil)
 	if err != .None_ { return err }
 	if body != nil { free_slice(body, allocator) }
@@ -298,10 +318,11 @@ drop_table :: proc(db: Client, name: string, allocator := context.allocator) -> 
 
 // count returns the row count for a table.
 count :: proc(db: Client, table: string, allocator := context.allocator) -> (i64, Mongrel_Error) {
+	context.allocator = allocator
 	escaped := url_path_escape(table, allocator)
 	defer if escaped != table { free_string(escaped, allocator) }
-	path := fmt.tprintf("/tables/%s/count", escaped)
-	defer free_string(path)
+	path := fmt.aprintf("/tables/%s/count", escaped)
+	defer free_string(path, allocator)
 	body, err := raw_request(db, allocator, .GET, path, nil)
 	if err != .None_ { return 0, err }
 	defer free_slice(body, allocator)
@@ -323,20 +344,18 @@ count :: proc(db: Client, table: string, allocator := context.allocator) -> (i64
 
 // put inserts a row. `idempotency_key`, if non-empty, makes the commit safe
 // to retry. Returns the per-operation result object (the first element of the
-// server's results array).
+// server's results array). The caller owns the returned JSONValue and must
+// destroy it with json_destroy when no longer needed.
 put :: proc(db: Client, table: string, cells: []Cell, idempotency_key: string, allocator := context.allocator) -> (JSONValue, Mongrel_Error) {
-	results, err := single_txn(db, table, cells, idempotency_key, "put", allocator)
-	if err != .None_ { return JSONNull{}, err }
-	if len(results) == 0 { return JSONNull{}, .None_ }
-	return results[0], .None_
+	return single_txn(db, table, cells, idempotency_key, "put", allocator)
 }
 
 // upsert inserts a row, or updates it on a primary-key conflict. `cells`
 // are the insert values; `update_cells`, when non-empty, are the values to
-// apply on a conflict (an empty slice means DO NOTHING).
+// apply on a conflict (an empty slice means DO NOTHING). The caller owns the
+// returned JSONValue and must destroy it with json_destroy.
 upsert :: proc(db: Client, table: string, cells: []Cell, update_cells: []Cell, idempotency_key: string, allocator := context.allocator) -> (JSONValue, Mongrel_Error) {
 	inner := json_object_make(allocator)
-	defer json_object_destroy(inner)
 	json_object_set(&inner, "table", jstr(table, allocator))
 	json_object_set(&inner, "cells", JSONArray(flatten_cells(cells, allocator)))
 	json_object_set(&inner, "returning", JSONBool(false))
@@ -346,59 +365,83 @@ upsert :: proc(db: Client, table: string, cells: []Cell, update_cells: []Cell, i
 	op := json_object_make(allocator)
 	json_object_set(&op, "upsert", inner)
 	ops := make([dynamic]JSONValue, allocator)
-	defer free_dyn(ops)
 	append(&ops, op)
+	defer {
+		json_destroy(op, allocator)
+		free_dyn(ops)
+	}
 
 	results, err := commit_txn(db, ops[:], idempotency_key, allocator)
 	if err != .None_ { return JSONNull{}, err }
 	if len(results) == 0 { return JSONNull{}, .None_ }
-	return results[0], .None_
+	out := results[0]
+	for i in 1..<len(results) { json_destroy(results[i], allocator) }
+	free_slice(results, allocator)
+	return out, .None_
 }
 
 // delete removes a row by its internal row id.
 delete :: proc(db: Client, table: string, row_id: i64, allocator := context.allocator) -> Mongrel_Error {
 	inner := json_object_make(allocator)
-	defer json_object_destroy(inner)
 	json_object_set(&inner, "table", jstr(table, allocator))
 	json_object_set(&inner, "row_id", JSONInteger(row_id))
 	op := json_object_make(allocator)
 	json_object_set(&op, "delete", inner)
 	ops := make([dynamic]JSONValue, allocator)
-	defer free_dyn(ops)
 	append(&ops, op)
-	_, err := commit_txn(db, ops[:], "", allocator)
-	return err
+	defer {
+		json_destroy(op, allocator)
+		free_dyn(ops)
+	}
+	results, err := commit_txn(db, ops[:], "", allocator)
+	if err != .None_ { return err }
+	for r in results { json_destroy(r, allocator) }
+	free_slice(results, allocator)
+	return .None_
 }
 
 // delete_by_pk removes a row by its primary-key value.
 delete_by_pk :: proc(db: Client, table: string, pk: JSONValue, allocator := context.allocator) -> Mongrel_Error {
 	inner := json_object_make(allocator)
-	defer json_object_destroy(inner)
 	json_object_set(&inner, "table", jstr(table, allocator))
-	json_object_set(&inner, "pk", pk)
+	json_object_set(&inner, "pk", json_clone(pk, allocator))
 	op := json_object_make(allocator)
 	json_object_set(&op, "delete_by_pk", inner)
 	ops := make([dynamic]JSONValue, allocator)
-	defer free_dyn(ops)
 	append(&ops, op)
-	_, err := commit_txn(db, ops[:], "", allocator)
-	return err
+	defer {
+		json_destroy(op, allocator)
+		free_dyn(ops)
+	}
+	results, err := commit_txn(db, ops[:], "", allocator)
+	if err != .None_ { return err }
+	for r in results { json_destroy(r, allocator) }
+	free_slice(results, allocator)
+	return .None_
 }
 
 // single_txn is the convenience helper for put: it builds a one-op put
 // transaction (no update_cells).
-single_txn :: proc(db: Client, table: string, cells: []Cell, idempotency_key: string, kind: string, allocator: mem.Allocator) -> ([]JSONValue, Mongrel_Error) {
+single_txn :: proc(db: Client, table: string, cells: []Cell, idempotency_key: string, kind: string, allocator: mem.Allocator) -> (JSONValue, Mongrel_Error) {
 	inner := json_object_make(allocator)
-	defer json_object_destroy(inner)
 	json_object_set(&inner, "table", jstr(table, allocator))
 	json_object_set(&inner, "cells", JSONArray(flatten_cells(cells, allocator)))
 	json_object_set(&inner, "returning", JSONBool(false))
 	op := json_object_make(allocator)
 	json_object_set(&op, kind, inner)
 	ops := make([dynamic]JSONValue, allocator)
-	defer free_dyn(ops)
 	append(&ops, op)
-	return commit_txn(db, ops[:], idempotency_key, allocator)
+	defer {
+		json_destroy(op, allocator)
+		free_dyn(ops)
+	}
+	results, err := commit_txn(db, ops[:], idempotency_key, allocator)
+	if err != .None_ { return JSONNull{}, err }
+	if len(results) == 0 { return JSONNull{}, .None_ }
+	out := results[0]
+	for i in 1..<len(results) { json_destroy(results[i], allocator) }
+	free_slice(results, allocator)
+	return out, .None_
 }
 
 // ── Query ─────────────────────────────────────────────────────────────────
@@ -412,6 +455,7 @@ QueryBuilder :: struct {
 	has_proj:   bool,
 	limit_val:  i64,
 	has_limit:  bool,
+	allocator:  mem.Allocator,
 }
 
 // QueryCondition is a normalized (type, params) condition pushed down to a
@@ -428,13 +472,14 @@ query :: proc(db: Client, table: string, allocator := context.allocator) -> Quer
 		table = table,
 		conditions = make([dynamic]QueryCondition, allocator),
 		projection = make([dynamic]i64, allocator),
+		allocator = allocator,
 	}
 }
 
 // where_ appends a condition. `cond_type` names the condition (e.g. "pk",
 // "column_eq", "range"); `params` is the condition payload, normalized.
 where_ :: proc(qb: ^QueryBuilder, cond_type: string, params: JSONObject) -> ^QueryBuilder {
-	normalized := normalize_condition(cond_type, params)
+	normalized := normalize_condition(cond_type, params, qb.allocator)
 	append(&qb.conditions, QueryCondition{cond_type, normalized})
 	return qb
 }
@@ -455,14 +500,25 @@ limit_ :: proc(qb: ^QueryBuilder, row_limit: i64) -> ^QueryBuilder {
 }
 
 // execute builds the request, POSTs it to `/kit/query`, decodes the result
-// set, and returns the rows.
+// set, and returns the rows. The caller owns each row JSONValue and the slice
+// itself; call json_destroy on every element and free_slice on the slice.
 execute :: proc(qb: ^QueryBuilder, allocator := context.allocator) -> ([]JSONValue, Mongrel_Error) {
 	root := json_object_make(allocator)
-	defer json_object_destroy(root)
 	json_object_set(&root, "table", jstr(qb.table, allocator))
+	conds: [dynamic]JSONValue
+	proj: [dynamic]JSONValue
+	defer {
+		table_v, _ := json_object_get(root, "table")
+		if s, ok := table_v.(JSONString); ok { free_string(string(s), allocator) }
+		for co in conds {
+			if obj, ok := co.(JSONObject); ok { json_object_destroy(obj, allocator) }
+		}
+		free_dyn(conds)
+		free_dyn(proj)
+		json_object_destroy(root, allocator)
+	}
 	if len(qb.conditions) > 0 {
-		conds := make([dynamic]JSONValue, 0, len(qb.conditions), allocator)
-		defer free_dyn(conds)
+		conds = make([dynamic]JSONValue, 0, len(qb.conditions), allocator)
 		for c in qb.conditions {
 			cond_obj := json_object_make(allocator)
 			json_object_set(&cond_obj, c.condition_type, c.params)
@@ -471,8 +527,7 @@ execute :: proc(qb: ^QueryBuilder, allocator := context.allocator) -> ([]JSONVal
 		json_object_set(&root, "conditions", conds)
 	}
 	if qb.has_proj {
-		proj := make([dynamic]JSONValue, 0, len(qb.projection), allocator)
-		defer free_dyn(proj)
+		proj = make([dynamic]JSONValue, 0, len(qb.projection), allocator)
 		for id in qb.projection { append(&proj, JSONInteger(id)) }
 		json_object_set(&root, "projection", proj)
 	}
@@ -495,11 +550,14 @@ execute :: proc(qb: ^QueryBuilder, allocator := context.allocator) -> ([]JSONVal
 	if !has { return nil, .Json }
 	rows, ok2 := rows_any.(JSONArray)
 	if !ok2 { return nil, .Json }
-	return rows[:], .None_
+	out := make([dynamic]JSONValue, 0, len(rows), allocator)
+	for row in rows { append(&out, json_clone(row, allocator)) }
+	return out[:], .None_
 }
 
 // free_query_builder releases the dynamic allocations held by a QueryBuilder.
 free_query_builder :: proc(qb: ^QueryBuilder) {
+	for cond in qb.conditions { json_destroy(cond.params, qb.allocator) }
 	free_dyn(qb.conditions)
 	free_dyn(qb.projection)
 }
@@ -512,45 +570,47 @@ Transaction :: struct {
 	db:        Client,
 	ops:       [dynamic]JSONValue,
 	committed: bool,
+	allocator: mem.Allocator,
 }
 
 // begin starts a new batch transaction.
 begin :: proc(db: Client, allocator := context.allocator) -> Transaction {
-	return Transaction{db = db, ops = make([dynamic]JSONValue, allocator)}
+	return Transaction{db = db, ops = make([dynamic]JSONValue, allocator), allocator = allocator}
 }
 
-// txn_put stages an insert on the transaction.
-txn_put :: proc(t: ^Transaction, table: string, cells: []Cell, returning: bool, allocator := context.allocator) -> (^Transaction, Mongrel_Error) {
+// txn_put stages an insert on the transaction. Allocations use the
+// transaction's allocator so rollback/free_transaction can destroy them safely.
+txn_put :: proc(t: ^Transaction, table: string, cells: []Cell, returning: bool) -> (^Transaction, Mongrel_Error) {
 	if t.committed { return nil, .Already_Committed }
-	inner := json_object_make(allocator)
-	json_object_set(&inner, "table", jstr(table, allocator))
-	json_object_set(&inner, "cells", JSONArray(flatten_cells(cells, allocator)))
+	inner := json_object_make(t.allocator)
+	json_object_set(&inner, "table", jstr(table, t.allocator))
+	json_object_set(&inner, "cells", JSONArray(flatten_cells(cells, t.allocator)))
 	json_object_set(&inner, "returning", JSONBool(returning))
-	op := json_object_make(allocator)
+	op := json_object_make(t.allocator)
 	json_object_set(&op, "put", inner)
 	append(&t.ops, op)
 	return t, .None_
 }
 
 // txn_delete stages a delete by row id.
-txn_delete :: proc(t: ^Transaction, table: string, row_id: i64, allocator := context.allocator) -> (^Transaction, Mongrel_Error) {
+txn_delete :: proc(t: ^Transaction, table: string, row_id: i64) -> (^Transaction, Mongrel_Error) {
 	if t.committed { return nil, .Already_Committed }
-	inner := json_object_make(allocator)
-	json_object_set(&inner, "table", jstr(table, allocator))
+	inner := json_object_make(t.allocator)
+	json_object_set(&inner, "table", jstr(table, t.allocator))
 	json_object_set(&inner, "row_id", JSONInteger(row_id))
-	op := json_object_make(allocator)
+	op := json_object_make(t.allocator)
 	json_object_set(&op, "delete", inner)
 	append(&t.ops, op)
 	return t, .None_
 }
 
 // txn_delete_by_pk stages a delete by primary key.
-txn_delete_by_pk :: proc(t: ^Transaction, table: string, pk: JSONValue, allocator := context.allocator) -> (^Transaction, Mongrel_Error) {
+txn_delete_by_pk :: proc(t: ^Transaction, table: string, pk: JSONValue) -> (^Transaction, Mongrel_Error) {
 	if t.committed { return nil, .Already_Committed }
-	inner := json_object_make(allocator)
-	json_object_set(&inner, "table", jstr(table, allocator))
-	json_object_set(&inner, "pk", pk)
-	op := json_object_make(allocator)
+	inner := json_object_make(t.allocator)
+	json_object_set(&inner, "table", jstr(table, t.allocator))
+	json_object_set(&inner, "pk", json_clone(pk, t.allocator))
+	op := json_object_make(t.allocator)
 	json_object_set(&op, "delete_by_pk", inner)
 	append(&t.ops, op)
 	return t, .None_
@@ -562,7 +622,9 @@ txn_count :: proc(t: Transaction) -> int {
 }
 
 // commit sends a batch of staged operations atomically to `/kit/txn` and
-// returns the per-operation results array.
+// returns the per-operation results array. The caller owns each result
+// JSONValue and the slice itself; call json_destroy on every element and
+// free_slice on the slice.
 commit :: proc(t: ^Transaction, idempotency_key: string, allocator := context.allocator) -> ([]JSONValue, Mongrel_Error) {
 	if t.committed { return nil, .Already_Committed }
 	if len(t.ops) == 0 {
@@ -579,12 +641,14 @@ commit :: proc(t: ^Transaction, idempotency_key: string, allocator := context.al
 rollback :: proc(t: ^Transaction) -> Mongrel_Error {
 	if t.committed { return .Already_Committed }
 	t.committed = true
+	for op in t.ops { json_destroy(op, t.allocator) }
 	clear(&t.ops)
 	return .None_
 }
 
 // free_transaction releases the dynamic allocations held by a Transaction.
 free_transaction :: proc(t: ^Transaction) {
+	for op in t.ops { json_destroy(op, t.allocator) }
 	free_dyn(t.ops)
 }
 
@@ -593,10 +657,11 @@ free_transaction :: proc(t: ^Transaction) {
 // sql executes a SQL statement via the `/sql` endpoint, requesting JSON
 // output. The server returns a JSON array of row objects keyed by column
 // name. For statements that yield no rows (DDL/DML), an empty slice is
-// returned.
+// returned. The caller owns each row JSONValue and the slice itself; call
+// json_destroy on every element and free_slice on the slice.
 sql :: proc(db: Client, sql_text: string, allocator := context.allocator) -> ([]JSONValue, Mongrel_Error) {
 	root := json_object_make(allocator)
-	defer json_object_destroy(root)
+	defer json_destroy(root, allocator)
 	json_object_set(&root, "sql", jstr(sql_text, allocator))
 	json_object_set(&root, "format", jstr("json", allocator))
 
@@ -616,7 +681,9 @@ sql :: proc(db: Client, sql_text: string, allocator := context.allocator) -> ([]
 	defer json_destroy(value, allocator)
 	arr, ok := value.(JSONArray)
 	if !ok { return nil, .None_ }
-	return arr[:], .None_
+	out := make([dynamic]JSONValue, 0, len(arr), allocator)
+	for item in arr { append(&out, json_clone(item, allocator)) }
+	return out[:], .None_
 }
 
 // ── Schema ────────────────────────────────────────────────────────────────
@@ -639,17 +706,19 @@ schema :: proc(db: Client, allocator := context.allocator) -> (map[string]JSONVa
 	if !ok2 { return nil, .Json }
 	out := make(map[string]JSONValue, len(tables.keys), allocator)
 	for i in 0..<len(tables.keys) {
-		out[tables.keys[i]] = tables.values[i]
+		k, _ := strings.clone(tables.keys[i], allocator)
+		out[k] = json_clone(tables.values[i], allocator)
 	}
 	return out, .None_
 }
 
 // schema_for returns the descriptor for a single table.
 schema_for :: proc(db: Client, table: string, allocator := context.allocator) -> (JSONValue, Mongrel_Error) {
+	context.allocator = allocator
 	escaped := url_path_escape(table, allocator)
 	defer if escaped != table { free_string(escaped, allocator) }
-	path := fmt.tprintf("/kit/schema/%s", escaped)
-	defer free_string(path)
+	path := fmt.aprintf("/kit/schema/%s", escaped)
+	defer free_string(path, allocator)
 	body, err := raw_request(db, allocator, .GET, path, nil)
 	if err != .None_ { return nil, err }
 	defer free_slice(body, allocator)
@@ -668,10 +737,14 @@ commit_txn :: proc(db: Client, ops: []JSONValue, idempotency_key: string, alloca
 	for op in ops { append(&ops_dyn, op) }
 
 	root := json_object_make(allocator)
-	defer json_object_destroy(root)
+	defer json_object_destroy(root, allocator)
 	json_object_set(&root, "ops", ops_dyn)
 	if idempotency_key != "" {
 		json_object_set(&root, "idempotency_key", jstr(idempotency_key, allocator))
+	}
+	defer {
+		ik_v, _ := json_object_get(root, "idempotency_key")
+		if s, ok := ik_v.(JSONString); ok { free_string(string(s), allocator) }
 	}
 
 	body, err := raw_request(db, allocator, .POST, "/kit/txn", root)
@@ -688,14 +761,16 @@ commit_txn :: proc(db: Client, ops: []JSONValue, idempotency_key: string, alloca
 	if !has { return nil, .None_ }
 	results, ok2 := results_any.(JSONArray)
 	if !ok2 { return nil, .Json }
-	return results[:], .None_
+	out := make([dynamic]JSONValue, 0, len(results), allocator)
+	for r in results { append(&out, json_clone(r, allocator)) }
+	return out[:], .None_
 }
 
 // raw_request builds and runs one request against the daemon via libcurl (C
 // FFI). Non-2xx responses are mapped to typed errors via `map_status`.
 raw_request :: proc(db: Client, allocator: mem.Allocator, method: Method, path: string, payload: Maybe(JSONValue)) -> ([]u8, Mongrel_Error) {
 	context.allocator = allocator
-	url := fmt.tprintf("%s/%s", db.base_url, strings.trim_left(path, "/"))
+	url := fmt.aprintf("%s/%s", db.base_url, strings.trim_left(path, "/"))
 	defer free_string(url)
 
 	body_str := ""
@@ -708,11 +783,17 @@ raw_request :: proc(db: Client, allocator: mem.Allocator, method: Method, path: 
 	defer if has_body { free_string(body_str, allocator) }
 
 	// CRLF validation: guard against any caller-supplied content sneaking a
-	// CR/LF through the auth header (request smuggling).
+	// CR/LF through the request URL or auth header (request smuggling).
+	if strings.contains(db.base_url, "\r") || strings.contains(db.base_url, "\n") {
+		return nil, .Query
+	}
 	if db.token != "" && (strings.contains(db.token, "\r") || strings.contains(db.token, "\n")) {
 		return nil, .Query
 	}
 	if db.username != "" && (strings.contains(db.username, "\r") || strings.contains(db.username, "\n")) {
+		return nil, .Query
+	}
+	if db.password != "" && (strings.contains(db.password, "\r") || strings.contains(db.password, "\n")) {
 		return nil, .Query
 	}
 
@@ -751,7 +832,7 @@ map_status :: proc(code: int) -> Mongrel_Error {
 		return .Http
 	case code == 401, code == 403:
 		return .Auth
-	case code == 402, code == 409:
+	case code == 409:
 		return .Conflict
 	case code == 404:
 		return .Not_Found
@@ -770,7 +851,7 @@ flatten_cells :: proc(cells: []Cell, allocator := context.allocator) -> [dynamic
 	flat := make([dynamic]JSONValue, 0, len(cells) * 2, allocator)
 	for c in cells {
 		append(&flat, JSONInteger(c.id))
-		append(&flat, c.value)
+		append(&flat, json_clone(c.value, allocator))
 	}
 	return flat
 }
@@ -789,10 +870,10 @@ column_to_value :: proc(c: Column, allocator := context.allocator) -> JSONValue 
 		for v in c.enum_variants { append(&arr, jstr(v, allocator)) }
 		json_object_set(&obj, "enum_variants", arr)
 	}
-	if c.has_default_expr && c.default_expr != "" {
+	if c.has_default_expr {
 		json_object_set(&obj, "default_expr", jstr(c.default_expr, allocator))
 	} else if c.has_default_scalar {
-		json_object_set(&obj, "default_value", c.default_scalar)
+		json_object_set(&obj, "default_value", json_clone(c.default_scalar, allocator), allocator)
 	} else if c.has_default && c.default_value != "" {
 		json_object_set(&obj, "default_value", jstr(c.default_value, allocator))
 	}
@@ -810,9 +891,9 @@ column_to_json_string :: proc(c: Column, allocator := context.allocator) -> stri
 
 // normalize_condition rewrites user-facing param names to the engine's
 // canonical condition fields.
-normalize_condition :: proc(cond_type: string, params: JSONObject) -> JSONObject {
+normalize_condition :: proc(cond_type: string, params: JSONObject, allocator := context.allocator) -> JSONObject {
 	fm_contains := cond_type == "fm_contains" || cond_type == "fm_contains_all"
-	out := json_object_make(context.allocator)
+	out := json_object_make(allocator)
 	for i in 0..<json_object_len(params) {
 		key := params.keys[i]
 		name := key
@@ -830,7 +911,7 @@ normalize_condition :: proc(cond_type: string, params: JSONObject) -> JSONObject
 		case:
 			if fm_contains && key == "value" { name = "pattern" }
 		}
-		json_object_set(&out, name, params.values[i])
+		json_object_set(&out, name, json_clone(params.values[i], allocator), allocator)
 	}
 	return out
 }

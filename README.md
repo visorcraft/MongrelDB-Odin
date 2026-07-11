@@ -34,7 +34,7 @@
 - **Typed CRUD** over the Kit transaction endpoint: `put` (with optional idempotency keys for safe retries), `upsert` (insert-or-update on PK conflict), and `delete`/`delete_by_pk` by row id or primary key. Cells are a `{column_id, JSONValue}` pair flattened to the server's on-wire `[col_id, value, ...]` array.
 - **Fluent query builder** that pushes conditions down to the engine's specialized indexes for sub-millisecond lookups: primary key, learned-range, bitmap equality, null checks, and FM-index full-text search. Friendly aliases (`column` -> `column_id`, `min`/`max` -> `lo`/`hi`) are translated to the server's on-wire keys.
 - **Idempotent batch transactions** - operations staged locally on a `Transaction` and committed atomically, with the engine enforcing unique, foreign-key, and check constraints at commit time. Idempotency keys return the original response on duplicate commits, even after a crash.
-- **Full SQL access** through the DataFusion-backed `/sql` endpoint (JSON format requested): recursive CTEs, window functions, `CREATE TABLE AS SELECT`, and multi-statement execution.
+- **Full SQL access** through the DataFusion-backed `/sql` endpoint (JSON format requested): recursive CTEs, window functions, `CREATE TABLE AS SELECT`, materialized views, and multi-statement execution.
 - **History retention** controls: get and set the history window, query older epochs with `AS OF EPOCH`, and read the earliest retained epoch.
 - **Schema management**: typed table creation, full schema catalog (`map[string]JSONValue`), and per-table descriptors.
 - **Typed errors**: a single `Mongrel_Error` enum you `switch` on - `.Auth` (401/403), `.Not_Found` (404), `.Conflict` (409), `.Query` (everything else non-2xx), `.Http` (transport), `.Json` (malformed response), plus `.Response_Too_Large` and `.Already_Committed`.
@@ -84,14 +84,18 @@ main :: proc() {
 		{2, m.string_value("Alice")},
 		{3, m.float_value(99.5)},
 	}
-	_, perr := m.put(db, "orders", r, "")
+	pres, perr := m.put(db, "orders", r, "")
+		defer m.json_destroy(pres)
 	if perr != .None_ { panic(m.mongrel_error_string(perr)) }
 
 	// Query with a native index condition (learned-range index).
 	qb := m.query(db, "orders")
 	defer m.free_query_builder(&qb)
-	m.where_(&qb, "range_f64", range_for(3, 100.0, 0.0))
+	range_params := range_for(3, 100.0, 0.0)
+		defer m.json_object_destroy(range_params)
+		m.where_(&qb, "range_f64", range_params)
 	rows, qerr := m.execute(&qb)
+		defer free_rows(rows)
 	if qerr != .None_ { panic(m.mongrel_error_string(qerr)) }
 	fmt.printf("rows: %d\n", len(rows))
 
@@ -100,6 +104,8 @@ main :: proc() {
 }
 
 // range_for builds a range condition payload {"column": id, "min": lo}.
+// The caller owns the returned object and must destroy it with
+// json_object_destroy when done.
 range_for :: proc(id: i64, lo, hi: f64) -> m.JSONObject {
 	o := m.json_object_make()
 	m.json_object_set(&o, "column", m.int_value(id))
@@ -108,6 +114,11 @@ range_for :: proc(id: i64, lo, hi: f64) -> m.JSONObject {
 		m.json_object_set(&o, "max", m.float_value(hi))
 	}
 	return o
+}
+
+free_rows :: proc(rows: []m.JSONValue) {
+	for row in rows { m.json_destroy(row) }
+	m.free_slice(rows)
 }
 ```
 
@@ -139,6 +150,7 @@ m.txn_put(&txn, "orders", cells, false)
 
 // atomic - all or nothing. The idempotency key makes it safe to retry.
 results, err := m.commit(&txn, "charge-order-123")
+	defer free_rows(results)
 if err == .Conflict {
 	// constraint violated - the engine already rolled back the whole batch.
 }
@@ -153,18 +165,25 @@ Conditions push down to the engine's specialized indexes. The builder accepts fr
 q := m.query(db, "orders")
 defer m.free_query_builder(&q)
 cond := m.json_object_make()
+defer m.json_object_destroy(cond)
 m.json_object_set(&cond, "column", m.int_value(3))
 m.json_object_set(&cond, "min", m.float_value(50.0))
 m.where_(&q, "range_f64", cond)
 m.limit_(&q, 100)
 rows, err := m.execute(&q)
+for row in rows { m.json_destroy(row) }
+m.free_slice(rows)
 
 // Primary-key lookup (the fastest path).
 pk := m.query(db, "orders")
 defer m.free_query_builder(&pk)
 pk_cond := m.json_object_make()
+defer m.json_object_destroy(pk_cond)
 m.json_object_set(&pk_cond, "value", m.int_value(42))
 m.where_(&pk, "pk", pk_cond)
+rows2, err2 := m.execute(&pk)
+for row in rows2 { m.json_destroy(row) }
+m.free_slice(rows2)
 ```
 
 Query rows come back as `JSONValue` objects, each `{"row_id": ..., "cells": [col_id, value, ...]}`. Walk the flat cells array in pairs to read values by column id.
@@ -339,8 +358,14 @@ new_hr, err := m.set_history_retention_epochs(db, 1000)
 if err != .None_ { panic(m.mongrel_error_string(err)) }
 fmt.printf("window: %d, earliest: %d\n", new_hr.history_retention_epochs, new_hr.earliest_retained_epoch)
 
-// Query an older epoch.
-rows, err := m.sql(db, "SELECT id, amount FROM orders AS OF EPOCH 5")
+// Query an older epoch (use a captured epoch in real code).
+earliest, _ := m.earliest_retained_epoch(db)
+stmt := fmt.aprintf("SELECT id, amount FROM orders AS OF EPOCH %d", earliest)
+defer m.free_string(stmt)
+rows, err := m.sql(db, stmt)
+if err != .None_ { panic(m.mongrel_error_string(err)) }
+for row in rows { m.json_destroy(row) }
+m.free_slice(rows)
 ```
 
 Increasing retention cannot restore epochs that have already been pruned.

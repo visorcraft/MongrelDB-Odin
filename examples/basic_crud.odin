@@ -32,7 +32,7 @@ main :: proc() {
 	fmt.println("Connected to MongrelDB")
 
 	// Unique table name per run so concurrent/repeated runs never collide.
-	table := fmt.tprintf("example_crud_%d", os.get_pid())
+	table := fmt.aprintf("example_crud_%d", os.get_pid())
 	defer m.free_string(table)
 
 	// Always drop the table on exit.
@@ -53,22 +53,26 @@ main :: proc() {
 	}
 	fmt.println("Created table", table, "(id", tid, ")")
 
-	// Insert three rows. Cells pair column id -> value.
-	_, p1 := m.put(db, table, {
+	// Insert three rows. Cells pair column id -> value. The first return value
+	// is the per-operation result object and must be destroyed.
+	r1, p1 := m.put(db, table, {
 		{id = 1, value = m.int_value(1)},
 		{id = 2, value = m.string_value("Alice")},
 		{id = 3, value = m.float_value(95.5)},
 	}, "")
-	_, p2 := m.put(db, table, {
+	defer m.json_destroy(r1)
+	r2, p2 := m.put(db, table, {
 		{id = 1, value = m.int_value(2)},
 		{id = 2, value = m.string_value("Bob")},
 		{id = 3, value = m.float_value(82.0)},
 	}, "")
-	_, p3 := m.put(db, table, {
+	defer m.json_destroy(r2)
+	r3, p3 := m.put(db, table, {
 		{id = 1, value = m.int_value(3)},
 		{id = 2, value = m.string_value("Carol")},
 		{id = 3, value = m.float_value(78.3)},
 	}, "")
+	defer m.json_destroy(r3)
 	if p1 != .None_ || p2 != .None_ || p3 != .None_ {
 		fmt.eprintf("insert failed\n")
 		os.exit(1)
@@ -86,16 +90,18 @@ main :: proc() {
 		fmt.eprintf("query failed: %s\n", m.mongrel_error_string(qerr))
 		os.exit(1)
 	}
+	defer free_rows(rows)
 	fmt.printfln("Query returned %d rows:", len(rows))
 	print_rows(rows)
 
 	// Update Alice's score by re-putting the same primary key with new values.
 	// The PK is the row identity, so a put to an existing PK overwrites it.
-	_, uerr := m.put(db, table, {
+	ur, uerr := m.put(db, table, {
 		{id = 1, value = m.int_value(1)},
 		{id = 2, value = m.string_value("Alice")},
 		{id = 3, value = m.float_value(100.0)},
 	}, "")
+	defer m.json_destroy(ur)
 	if uerr != .None_ {
 		fmt.eprintf("update failed: %s\n", m.mongrel_error_string(uerr))
 		os.exit(1)
@@ -129,6 +135,11 @@ print_rows :: proc(rows: []m.JSONValue) {
 		}
 		fmt.println(" }")
 	}
+}
+
+free_rows :: proc(rows: []m.JSONValue) {
+	for row in rows { m.json_destroy(row) }
+	m.free_slice(rows)
 }
 
 format_value :: proc(v: m.JSONValue) -> string {

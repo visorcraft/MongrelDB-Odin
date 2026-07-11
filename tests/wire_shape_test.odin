@@ -129,7 +129,7 @@ column_to_json_emits_bool_and_null_defaults :: proc(t: ^testing.T) {
 @(test)
 column_to_json_emits_dynamic_default_expr :: proc(t: ^testing.T) {
 	col := m.Column{
-		id = 5,
+		id = 7,
 		name = "created_at",
 		ty = "timestamp",
 		has_default = true,
@@ -149,8 +149,8 @@ column_to_json_emits_dynamic_default_expr :: proc(t: ^testing.T) {
 @(test)
 column_to_json_full_static_default_matrix :: proc(t: ^testing.T) {
 	// The full static-default matrix: string, integer, boolean, explicit null,
-	// a literal "now" string, and default_expr. Each must preserve its JSON
-	// type on the wire and default_expr must suppress any default_value.
+	// literal "now" and "uuid" strings, and default_expr. Each must preserve its
+	// JSON type on the wire and default_expr must suppress any default_value.
 	string_col := m.Column{
 		id = 10, name = "status", ty = "varchar",
 		has_default = true, default_value = "draft",
@@ -171,8 +171,12 @@ column_to_json_full_static_default_matrix :: proc(t: ^testing.T) {
 		id = 14, name = "tag", ty = "varchar",
 		has_default = true, default_value = "now",
 	}
+	literal_uuid_col := m.Column{
+		id = 15, name = "uuid_col", ty = "varchar",
+		has_default = true, default_value = "uuid",
+	}
 	expr_col := m.Column{
-		id = 15, name = "created_at", ty = "timestamp_nanos",
+		id = 16, name = "created_at", ty = "timestamp_nanos",
 		has_default_expr = true, default_expr = "now",
 	}
 
@@ -180,22 +184,64 @@ column_to_json_full_static_default_matrix :: proc(t: ^testing.T) {
 	number_json := m.column_to_json_string(number_col)
 	bool_json := m.column_to_json_string(bool_col)
 	null_json := m.column_to_json_string(null_col)
-	literal_json := m.column_to_json_string(literal_now_col)
+	literal_now_json := m.column_to_json_string(literal_now_col)
+	literal_uuid_json := m.column_to_json_string(literal_uuid_col)
 	expr_json := m.column_to_json_string(expr_col)
 	defer m.free_string(string_json)
 	defer m.free_string(number_json)
 	defer m.free_string(bool_json)
 	defer m.free_string(null_json)
-	defer m.free_string(literal_json)
+	defer m.free_string(literal_now_json)
+	defer m.free_string(literal_uuid_json)
 	defer m.free_string(expr_json)
 
-	testing.expect(t, contains(string_json, "\"default_value\":\"draft\""))
-	testing.expect(t, contains(number_json, "\"default_value\":7"))
-	testing.expect(t, contains(bool_json, "\"default_value\":true"))
-	testing.expect(t, contains(null_json, "\"default_value\":null"))
-	testing.expect(t, contains(literal_json, "\"default_value\":\"now\""))
-	testing.expect(t, contains(expr_json, "\"default_expr\":\"now\""))
-	testing.expect(t, !contains(expr_json, "default_value"))
+	assert_default :: proc(t: ^testing.T, json_str, key: string, expected: m.JSONValue) {
+		parsed, perr := m.json_parse(transmute([]u8)json_str)
+		if perr != "" {
+			testing.fail(t)
+			return
+		}
+		defer m.json_destroy(parsed)
+		o, ok := parsed.(m.JSONObject)
+		testing.expect(t, ok)
+		if !ok { return }
+		v, has := m.json_object_get(o, key)
+		testing.expectf(t, has, "missing %s in %s", key, json_str)
+		if !has { return }
+		switch exp in expected {
+		case m.JSONNull:
+			_, is_null := v.(m.JSONNull)
+			testing.expectf(t, is_null, "expected null default in %s", json_str)
+		case m.JSONInteger:
+			got, is_int := v.(m.JSONInteger)
+			testing.expectf(t, is_int && i64(got) == i64(exp), "expected integer %d in %s", i64(exp), json_str)
+		case m.JSONBool:
+			got, is_bool := v.(m.JSONBool)
+			testing.expectf(t, is_bool && bool(got) == bool(exp), "expected bool %v in %s", bool(exp), json_str)
+		case m.JSONString:
+			got, is_str := v.(m.JSONString)
+			testing.expectf(t, is_str && string(got) == string(exp), "expected string %s in %s", string(exp), json_str)
+		}
+	}
+
+	assert_default(t, string_json, "default_value", m.JSONString("draft"))
+	assert_default(t, number_json, "default_value", m.JSONInteger(7))
+	assert_default(t, bool_json, "default_value", m.JSONBool(true))
+	assert_default(t, null_json, "default_value", m.JSONNull{})
+	assert_default(t, literal_now_json, "default_value", m.JSONString("now"))
+	assert_default(t, literal_uuid_json, "default_value", m.JSONString("uuid"))
+	assert_default(t, expr_json, "default_expr", m.JSONString("now"))
+
+	// default_expr must suppress any default_value/default_scalar.
+	parsed_expr, perr := m.json_parse(transmute([]u8)expr_json)
+	defer m.json_destroy(parsed_expr)
+	if perr == "" {
+		o, ok := parsed_expr.(m.JSONObject)
+		if ok {
+			_, has_default := m.json_object_get(o, "default_value")
+			testing.expectf(t, !has_default, "default_expr must suppress default_value in %s", expr_json)
+		}
+	}
 }
 
 @(test)
@@ -204,13 +250,26 @@ history_retention_payload_emits_exact_key :: proc(t: ^testing.T) {
 	defer m.json_object_destroy(payload)
 	wire := m.json_to_string(m.JSONObject(payload))
 	defer m.free_string(wire)
-	testing.expectf(t, contains(wire, "\"history_retention_epochs\":42"),
-		"expected history_retention_epochs key, got %s", wire)
-	testing.expect(t, !contains(wire, "earliest_retained_epoch"))
+
+	parsed, perr := m.json_parse(transmute([]u8)wire)
+	defer m.json_destroy(parsed)
+	testing.expectf(t, perr == "", "payload parse error: %s", perr)
+	if perr != "" { return }
+	o, ok := parsed.(m.JSONObject)
+	testing.expect(t, ok)
+	if !ok { return }
+	epochs_v, has := m.json_object_get(o, "history_retention_epochs")
+	testing.expect(t, has)
+	if has {
+		epochs, is_int := epochs_v.(m.JSONInteger)
+		testing.expectf(t, is_int && i64(epochs) == 42, "expected 42, got %v", epochs_v)
+	}
+	_, has_earliest := m.json_object_get(o, "earliest_retained_epoch")
+	testing.expectf(t, !has_earliest, "payload must not contain earliest_retained_epoch")
 }
 
 @(test)
-parse_history_retention_requires_both_keys :: proc(t: ^testing.T) {
+parse_history_retention_rejects_missing_and_malformed_keys :: proc(t: ^testing.T) {
 	// Full response decodes both u64 fields.
 	full := m.json_object_make()
 	defer m.json_object_destroy(full)
@@ -221,12 +280,36 @@ parse_history_retention_requires_both_keys :: proc(t: ^testing.T) {
 	testing.expect(t, hr.history_retention_epochs == 100)
 	testing.expect(t, hr.earliest_retained_epoch == 7)
 
-	// Missing key must fail with .Json.
-	missing := m.json_object_make()
-	defer m.json_object_destroy(missing)
-	m.json_object_set(&missing, "history_retention_epochs", m.int_value(100))
-	_, err2 := m.parse_history_retention(m.JSONObject(missing))
-	testing.expectf(t, err2 == .Json, "expected Json error, got %s", m.mongrel_error_string(err2))
+	// Missing either key must fail with .Json.
+	missing_earliest := m.json_object_make()
+	defer m.json_object_destroy(missing_earliest)
+	m.json_object_set(&missing_earliest, "history_retention_epochs", m.int_value(100))
+	_, err2 := m.parse_history_retention(m.JSONObject(missing_earliest))
+	testing.expectf(t, err2 == .Json, "expected Json error for missing earliest, got %s", m.mongrel_error_string(err2))
+
+	missing_window := m.json_object_make()
+	defer m.json_object_destroy(missing_window)
+	m.json_object_set(&missing_window, "earliest_retained_epoch", m.int_value(7))
+	_, err3 := m.parse_history_retention(m.JSONObject(missing_window))
+	testing.expectf(t, err3 == .Json, "expected Json error for missing window, got %s", m.mongrel_error_string(err3))
+
+	// Non-object or wrong-typed value must fail.
+	_, err4 := m.parse_history_retention(m.JSONString("bad"))
+	testing.expectf(t, err4 == .Json, "expected Json error for non-object, got %s", m.mongrel_error_string(err4))
+
+	string_value := m.json_object_make()
+	defer m.json_object_destroy(string_value)
+	m.json_object_set(&string_value, "history_retention_epochs", m.string_value("100"))
+	m.json_object_set(&string_value, "earliest_retained_epoch", m.int_value(7))
+	_, err5 := m.parse_history_retention(m.JSONObject(string_value))
+	testing.expectf(t, err5 == .Json, "expected Json error for string value, got %s", m.mongrel_error_string(err5))
+
+	negative := m.json_object_make()
+	defer m.json_object_destroy(negative)
+	m.json_object_set(&negative, "history_retention_epochs", m.int_value(-1))
+	m.json_object_set(&negative, "earliest_retained_epoch", m.int_value(7))
+	_, err6 := m.parse_history_retention(m.JSONObject(negative))
+	testing.expectf(t, err6 == .Json, "expected Json error for negative value, got %s", m.mongrel_error_string(err6))
 }
 
 @(test)
@@ -259,6 +342,7 @@ url_path_escape_escapes_spaces_and_slashes :: proc(t: ^testing.T) {
 	// segment.
 	testing.expectf(t, contains(esc, "%20"), "expected %%20 for space, got %s", esc)
 	testing.expect(t, !strings.contains(esc, " "))
+	testing.expect(t, !strings.contains(esc, "/"))
 }
 
 @(test)

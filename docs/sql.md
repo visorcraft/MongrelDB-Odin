@@ -18,7 +18,7 @@ native query builder.
 ## How `sql` behaves
 
 `sql(db, sql_text)` sends `{"sql": "...", "format": "json"}` to `/sql`. It
-returns `.None_` on a 2xx response.
+returns the decoded row slice and `.None_` on a 2xx response.
 
 In practice:
 
@@ -183,7 +183,7 @@ Both read from the same tables, but they are optimized for different jobs.
 | Reach for | When |
 |-----------|------|
 | **query builder** | Point lookups, range scans, bitmap filters, and full-text that map to a native index. Sub-millisecond, no parser overhead, and rows decode into typed values directly. |
-| **SQL** | DDL (`CREATE TABLE`, schemas), multi-statement setup, joins, recursive CTEs, window functions, and arbitrary aggregates. Also the natural choice for admin scripts and one-off analysis. |
+| **SQL** | DDL (`CREATE TABLE`, schemas, materialized views), multi-statement setup, joins, recursive CTEs, window functions, and arbitrary aggregates. Also the natural choice for admin scripts and one-off analysis. |
 
 Rules of thumb:
 

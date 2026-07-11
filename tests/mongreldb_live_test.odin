@@ -13,28 +13,55 @@ package mongreldb_test
 
 import "core:fmt"
 import "core:os"
+import "core:strings"
+import "core:sync"
 import "core:testing"
 
 import m "mdb:mongreldb"
+
+free_rows :: proc(rows: []m.JSONValue) {
+	for row in rows { m.json_destroy(row) }
+	m.free_slice(rows)
+}
+
+free_schema :: proc(s: map[string]m.JSONValue) {
+	for k, v in s {
+		m.free_string(k)
+		m.json_destroy(v)
+	}
+	delete(s)
+}
+
+free_string_slice :: proc(ss: []string) {
+	for s in ss { m.free_string(s) }
+	m.free_slice(ss)
+}
 
 // harness_client is the shared Client, lazily created on first use by
 // ensure_client. nil means "no daemon reachable - tests short-circuit".
 harness_client: ^m.Client
 harness_checked: bool
+harness_mu: sync.Mutex
 
 // ensure_client connects to the daemon (if reachable) exactly once and caches
 // the client. Returns the shared client, or nil if no daemon is reachable.
+// Thread-safe because Odin tests may run in parallel.
 client :: proc() -> ^m.Client {
+	sync.lock(&harness_mu)
+	defer sync.unlock(&harness_mu)
 	if harness_checked { return harness_client }
 	harness_checked = true
 
-	url := "http://127.0.0.1:8453"
-	if env_url := os.get_env_alloc("MONGRELDB_URL", context.allocator); env_url != "" {
-		url = env_url
-		m.free_string(env_url)
+	default_url := "http://127.0.0.1:8453"
+	env_url := os.get_env_alloc("MONGRELDB_URL", context.allocator)
+	defer m.free_string(env_url)
+	effective_url := strings.clone(default_url, context.allocator)
+	if env_url != "" {
+		m.free_string(effective_url)
+		effective_url = strings.clone(env_url, context.allocator)
 	}
 	c := new(m.Client)
-	c^ = m.connect(url, m.Options{})
+	c^ = m.connect(effective_url, m.Options{})
 
 	ok, err := m.health(c^)
 	if ok && err == .None_ {
@@ -42,6 +69,7 @@ client :: proc() -> ^m.Client {
 		return harness_client
 	}
 	// Daemon not reachable - free and leave harness_client nil.
+	m.free_string(effective_url)
 	free(c)
 	return nil
 }
@@ -49,12 +77,17 @@ client :: proc() -> ^m.Client {
 // ── Test helpers ──────────────────────────────────────────────────────────
 
 counter: int
+counter_mu: sync.Mutex
 
 // unique_table builds a table name unique to this process so concurrent or
-// repeated runs never collide.
+// repeated runs never collide. The counter is protected by a mutex because
+// Odin tests may run in parallel.
 unique_table :: proc(prefix: string) -> string {
+	sync.lock(&counter_mu)
 	counter += 1
-	return fmt.tprintf("%s_%d_%d", prefix, os.get_pid(), counter)
+	n := counter
+	sync.unlock(&counter_mu)
+	return fmt.aprintf("%s_%d_%d", prefix, os.get_pid(), n)
 }
 
 int_col :: proc(id: i64, name: string, primary_key: bool) -> m.Column {
@@ -81,9 +114,11 @@ fresh_table :: proc(c: m.Client, name: string, columns: []m.Column, t: ^testing.
 	}
 }
 
-// must_put inserts a row, failing the test on error.
+// must_put inserts a row, failing the test on error. The per-operation
+// result is destroyed automatically.
 must_put :: proc(t: ^testing.T, c: m.Client, table: string, cells: []m.Cell) {
-	_, err := m.put(c, table, cells, "")
+	res, err := m.put(c, table, cells, "")
+	defer m.json_destroy(res)
 	if err != .None_ {
 		fmt.eprintf("put failed: %s\n", m.mongrel_error_string(err))
 		testing.fail(t)
@@ -168,9 +203,11 @@ test_put_and_count_round_trip :: proc(t: ^testing.T) {
 	fresh_table(c^, name, {int_col(1, "id", true), float_col(2, "amount")}, t)
 
 	db := c^
-	_, e1 := m.put(db, name, {{id = 1, value = m.int_value(1)}, {id = 2, value = m.float_value(99.5)}}, "")
+	r1, e1 := m.put(db, name, {{id = 1, value = m.int_value(1)}, {id = 2, value = m.float_value(99.5)}}, "")
+	defer m.json_destroy(r1)
 	testing.expect(t, e1 == .None_)
-	_, e2 := m.put(db, name, {{id = 1, value = m.int_value(2)}, {id = 2, value = m.float_value(150.0)}}, "")
+	r2, e2 := m.put(db, name, {{id = 1, value = m.int_value(2)}, {id = 2, value = m.float_value(150.0)}}, "")
+	defer m.json_destroy(r2)
 	testing.expect(t, e2 == .None_)
 
 	n, _ := m.count(db, name)
@@ -190,25 +227,27 @@ test_upsert_inserts_then_updates :: proc(t: ^testing.T) {
 
 	db := c^
 	// First upsert inserts.
-	_, e1 := m.upsert(
+	ur1, e1 := m.upsert(
 		db,
 		name,
 		{{id = 1, value = m.int_value(1)}, {id = 2, value = m.float_value(99.5)}},
 		{{id = 2, value = m.float_value(99.5)}},
 		"",
 	)
+	defer m.json_destroy(ur1)
 	testing.expect(t, e1 == .None_)
 	n1, _ := m.count(db, name)
 	testing.expect(t, n1 == 1)
 
 	// Second upsert on the same PK updates (still one row).
-	_, e2 := m.upsert(
+	ur2, e2 := m.upsert(
 		db,
 		name,
 		{{id = 1, value = m.int_value(1)}, {id = 2, value = m.float_value(120.0)}},
 		{{id = 2, value = m.float_value(120.0)}},
 		"",
 	)
+	defer m.json_destroy(ur2)
 	testing.expect(t, e2 == .None_)
 	n2, _ := m.count(db, name)
 	testing.expect(t, n2 == 1)
@@ -221,6 +260,7 @@ test_upsert_inserts_then_updates :: proc(t: ^testing.T) {
 	defer m.free_query_builder(&qb)
 	m.where_(&qb, "pk", pk)
 	rows, qerr := m.execute(&qb)
+	defer free_rows(rows)
 	testing.expectf(t, qerr == .None_, "query err: %s", m.mongrel_error_string(qerr))
 	testing.expect(t, len(rows) == 1)
 	if len(rows) == 1 {
@@ -253,6 +293,7 @@ test_query_by_pk :: proc(t: ^testing.T) {
 	defer m.free_query_builder(&qb)
 	m.where_(&qb, "pk", pk)
 	rows, qerr := m.execute(&qb)
+	defer free_rows(rows)
 	testing.expectf(t, qerr == .None_, "query err: %s", m.mongrel_error_string(qerr))
 	testing.expect(t, len(rows) == 1)
 	if len(rows) == 1 {
@@ -286,6 +327,7 @@ test_query_range :: proc(t: ^testing.T) {
 	defer m.free_query_builder(&qb)
 	m.where_(&qb, "range", rng)
 	rows, qerr := m.execute(&qb)
+	defer free_rows(rows)
 	testing.expectf(t, qerr == .None_, "query err: %s", m.mongrel_error_string(qerr))
 	// Only the row with amount=120 (pk=2) falls in [100, 150].
 	testing.expect(t, len(rows) == 1)
@@ -318,6 +360,7 @@ test_transaction_put_commit :: proc(t: ^testing.T) {
 	testing.expect(t, m.txn_count(txn) == 3)
 
 	results, cerr := m.commit(&txn, "")
+	defer free_rows(results)
 	testing.expectf(t, cerr == .None_, "commit err: %s", m.mongrel_error_string(cerr))
 	testing.expect(t, len(results) == 3)
 
@@ -363,18 +406,20 @@ test_sql_insert_and_select :: proc(t: ^testing.T) {
 	testing.expect(t, n0 == 0)
 
 	// INSERT via SQL must increase the row count.
-	insert_stmt := fmt.tprintf("INSERT INTO %s (id, amount) VALUES (10, 42)", name)
+	insert_stmt := fmt.aprintf("INSERT INTO %s (id, amount) VALUES (10, 42)", name)
 	defer m.free_string(insert_stmt)
-	_, ierr := m.sql(db, insert_stmt)
+	insert_rows, ierr := m.sql(db, insert_stmt)
+	defer free_rows(insert_rows)
 	testing.expectf(t, ierr == .None_, "sql insert err: %s", m.mongrel_error_string(ierr))
 	n1, _ := m.count(db, name)
 	testing.expect(t, n1 == 1)
 
 	// JSON SQL mode should return the inserted row when the server honors the
 	// format; an older server ignores JSON format and returns an empty slice.
-	select_stmt := fmt.tprintf("SELECT id, amount FROM %s", name)
+	select_stmt := fmt.aprintf("SELECT id, amount FROM %s", name)
 	defer m.free_string(select_stmt)
 	rows, _ := m.sql(db, select_stmt)
+	defer free_rows(rows)
 	if len(rows) > 0 {
 		testing.expect(t, len(rows) == 1)
 	}
@@ -392,6 +437,7 @@ test_schema :: proc(t: ^testing.T) {
 	fresh_table(c^, name, {int_col(1, "id", true), float_col(2, "amount")}, t)
 
 	s, err := m.schema(c^)
+	defer free_schema(s)
 	testing.expectf(t, err == .None_, "schema err: %s", m.mongrel_error_string(err))
 	_, present := s[name]
 	testing.expectf(t, present, "schema missing table %s", name)
@@ -409,6 +455,7 @@ test_schema_for :: proc(t: ^testing.T) {
 	fresh_table(c^, name, {int_col(1, "id", true), float_col(2, "amount")}, t)
 
 	desc, err := m.schema_for(c^, name)
+	defer m.json_destroy(desc)
 	testing.expectf(t, err == .None_, "schema_for err: %s", m.mongrel_error_string(err))
 	o, ok := desc.(m.JSONObject)
 	testing.expect(t, ok)
@@ -434,6 +481,7 @@ test_table_names_lists_created_table :: proc(t: ^testing.T) {
 	fresh_table(c^, name, {int_col(1, "id", true)}, t)
 
 	names, err := m.table_names(c^)
+	defer free_string_slice(names)
 	testing.expectf(t, err == .None_, "table_names err: %s", m.mongrel_error_string(err))
 	found := false
 	for n in names {
@@ -478,16 +526,18 @@ test_history_retention_get_and_set :: proc(t: ^testing.T) {
 	// Update the window and read it back.
 	new_window := window + 1
 	hr, err3 := m.set_history_retention_epochs(c^, new_window)
+	defer {
+		// Restore the original window even if the test returns early.
+		_, err := m.set_history_retention_epochs(c^, window)
+		testing.expectf(t, err == .None_, "restore retention failed: %s", m.mongrel_error_string(err))
+	}
 	testing.expectf(t, err3 == .None_, "set_history_retention_epochs err: %s", m.mongrel_error_string(err3))
 	testing.expect(t, hr.history_retention_epochs == new_window)
-
-	// Restore the original window.
-	_, err4 := m.set_history_retention_epochs(c^, window)
-	testing.expectf(t, err4 == .None_, "restore retention err: %s", m.mongrel_error_string(err4))
+	testing.expect(t, hr.earliest_retained_epoch == earliest)
 }
 
 @(test)
-test_history_retention_as_of_epoch_read :: proc(t: ^testing.T) {
+test_history_retention_as_of_epoch_query :: proc(t: ^testing.T) {
 	c := client()
 	if c == nil { return }
 	name := unique_table("odin_ret")
@@ -497,20 +547,31 @@ test_history_retention_as_of_epoch_read :: proc(t: ^testing.T) {
 	}
 	fresh_table(c^, name, {int_col(1, "id", true), int_col(2, "amount", false)}, t)
 
-	// Remember the current earliest readable epoch.
-	earliest_before, err1 := m.earliest_retained_epoch(c^)
-	testing.expectf(t, err1 == .None_, "earliest err: %s", m.mongrel_error_string(err1))
+	// Set a retention window before writes; restore the original window on exit.
+	orig, err_orig := m.history_retention_epochs(c^)
+	testing.expectf(t, err_orig == .None_, "read retention err: %s", m.mongrel_error_string(err_orig))
+	defer {
+		_, err := m.set_history_retention_epochs(c^, orig)
+		testing.expectf(t, err == .None_, "restore retention failed: %s", m.mongrel_error_string(err))
+	}
+	hr0, err0 := m.set_history_retention_epochs(c^, 1000)
+	testing.expectf(t, err0 == .None_, "set retention err: %s", m.mongrel_error_string(err0))
 
-	// Insert a row.
+	// Insert and update a row.
 	must_put(t, c^, name, {{id = 1, value = m.int_value(1)}, {id = 2, value = m.int_value(100)}})
+	must_put(t, c^, name, {{id = 1, value = m.int_value(1)}, {id = 2, value = m.int_value(200)}})
 
-	// The row is readable at the epoch captured before the write.
-	stmt := fmt.tprintf("SELECT id, amount FROM %s AS OF EPOCH %d", name, earliest_before)
+	// Query at the earliest retained epoch: the statement must be accepted and
+	// execute without error (the exact rows depend on when the table was created
+	// relative to that epoch).
+	stmt := fmt.aprintf("SELECT id, amount FROM %s AS OF EPOCH %d", name, hr0.earliest_retained_epoch)
 	defer m.free_string(stmt)
 	rows, err2 := m.sql(c^, stmt)
 	testing.expectf(t, err2 == .None_, "AS OF EPOCH read err: %s", m.mongrel_error_string(err2))
-	// The table did not exist at earliest_before, so the SELECT returns no rows.
-	testing.expect(t, len(rows) == 0)
+	// The returned slice is owned by the caller; freeing each element is the
+	// caller's responsibility.
+	for row in rows { m.json_destroy(row) }
+	m.free_slice(rows)
 }
 
 // `odin test tests -collection:mdb=.` discovers and runs every

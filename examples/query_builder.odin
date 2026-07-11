@@ -31,7 +31,7 @@ main :: proc() {
 	fmt.println("Connected to MongrelDB")
 
 	// Unique table name per run so concurrent/repeated runs never collide.
-	table := fmt.tprintf("example_query_%d", os.get_pid())
+	table := fmt.aprintf("example_query_%d", os.get_pid())
 	defer m.free_string(table)
 
 	// Always drop the table on exit.
@@ -51,32 +51,38 @@ main :: proc() {
 	}
 	fmt.println("Created table", table)
 
-	// Five rows with varying scores.
-	_, e1 := m.put(db, table, {
+	// Five rows with varying scores. The first return from put is the
+	// per-operation result object and must be destroyed.
+	r1, e1 := m.put(db, table, {
 		{id = 1, value = m.int_value(1)},
 		{id = 2, value = m.string_value("Alice")},
 		{id = 3, value = m.float_value(40.0)},
 	}, "")
-	_, e2 := m.put(db, table, {
+	defer m.json_destroy(r1)
+	r2, e2 := m.put(db, table, {
 		{id = 1, value = m.int_value(2)},
 		{id = 2, value = m.string_value("Bob")},
 		{id = 3, value = m.float_value(65.0)},
 	}, "")
-	_, e3 := m.put(db, table, {
+	defer m.json_destroy(r2)
+	r3, e3 := m.put(db, table, {
 		{id = 1, value = m.int_value(3)},
 		{id = 2, value = m.string_value("Carol")},
 		{id = 3, value = m.float_value(82.0)},
 	}, "")
-	_, e4 := m.put(db, table, {
+	defer m.json_destroy(r3)
+	r4, e4 := m.put(db, table, {
 		{id = 1, value = m.int_value(4)},
 		{id = 2, value = m.string_value("Dave")},
 		{id = 3, value = m.float_value(91.0)},
 	}, "")
-	_, e5 := m.put(db, table, {
+	defer m.json_destroy(r4)
+	r5, e5 := m.put(db, table, {
 		{id = 1, value = m.int_value(5)},
 		{id = 2, value = m.string_value("Eve")},
 		{id = 3, value = m.float_value(12.5)},
 	}, "")
+	defer m.json_destroy(r5)
 	if e1 != .None_ || e2 != .None_ || e3 != .None_ || e4 != .None_ || e5 != .None_ {
 		fmt.eprintf("insert failed\n")
 		os.exit(1)
@@ -101,6 +107,7 @@ main :: proc() {
 		fmt.eprintf("range query failed: %s\n", m.mongrel_error_string(rerr))
 		os.exit(1)
 	}
+	defer free_rows(range_rows)
 	fmt.printfln("Range query (score in [60,90]) returned %d rows:", len(range_rows))
 	print_rows(range_rows)
 
@@ -117,6 +124,7 @@ main :: proc() {
 		fmt.eprintf("pk query failed: %s\n", m.mongrel_error_string(perr))
 		os.exit(1)
 	}
+	defer free_rows(pk_rows)
 	fmt.printfln("PK query (id == 4) returned %d rows:", len(pk_rows))
 	print_rows(pk_rows)
 }
@@ -135,6 +143,11 @@ print_rows :: proc(rows: []m.JSONValue) {
 		}
 		fmt.println(" }")
 	}
+}
+
+free_rows :: proc(rows: []m.JSONValue) {
+	for row in rows { m.json_destroy(row) }
+	m.free_slice(rows)
 }
 
 format_value :: proc(v: m.JSONValue) -> string {

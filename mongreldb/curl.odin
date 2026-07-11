@@ -19,6 +19,7 @@ import "core:c"
 import "core:fmt"
 import "core:mem"
 import "core:strings"
+import "core:sync"
 
 // Method is the HTTP verb the client uses.
 Method :: enum {
@@ -40,13 +41,13 @@ CURLE_OK :: 0
 
 // CURLoption values used by the client (from curl/curl.h).
 CURLOPT_URL :: i32(10002)
-CURLOPT_WRITEFUNCTION :: i32(10011)
+CURLOPT_WRITEFUNCTION :: i32(20011)
 CURLOPT_WRITEDATA :: i32(10001)
 CURLOPT_POSTFIELDS :: i32(10015)
 CURLOPT_HTTPHEADER :: i32(10023)
 CURLOPT_CUSTOMREQUEST :: i32(10036)
-CURLOPT_FOLLOWLOCATION :: i32(10052)
-CURLOPT_HEADER :: i32(10058)
+CURLOPT_FOLLOWLOCATION :: i32(52)
+CURLOPT_HEADER :: i32(42)
 CURLOPT_TIMEOUT :: i32(13)         // max seconds for the whole transfer
 CURLOPT_CONNECTTIMEOUT :: i32(78)  // max seconds for the connection phase
 
@@ -54,10 +55,10 @@ CURLOPT_CONNECTTIMEOUT :: i32(78)  // max seconds for the connection phase
 CURLINFO_RESPONSE_CODE :: u32(0x200002)
 
 // recv_buffer_size is the working buffer pre-allocated per request for the
-// response body. It is large enough for all practical daemon responses (the
-// full 256 MB cap is enforced separately in raw_request). Allocated and freed
-// once per request; no growth happens inside the C callback.
-recv_buffer_size :: u64(64 * 1024 * 1024)
+// response body. It matches the max_response_bytes cap enforced in raw_request
+// so responses up to that size can be received. Allocated and freed once per
+// request; no growth happens inside the C callback.
+recv_buffer_size :: u64(268_435_456)
 
 // foreign declarations against libcurl. `foreign import lib "system:curl"`
 // links the shared libcurl; the `foreign lib { ... }` block declares the
@@ -127,10 +128,13 @@ curl_write_cb :: proc "c" (ptr: rawptr, size: c.size_t, nmemb: c.size_t, data: r
 }
 
 curl_inited: bool = false
+curl_init_mu: sync.Mutex
 
 // curl_init_once initializes curl's global state exactly once per process.
-// Idempotent.
+// Idempotent and thread-safe; libcurl's global init is not thread-safe.
 curl_init_once :: proc() {
+	sync.lock(&curl_init_mu)
+	defer sync.unlock(&curl_init_mu)
 	if curl_inited { return }
 	global_init(0)
 	curl_inited = true
@@ -182,11 +186,12 @@ curl_perform :: proc(
 		_ = easy_setopt(handle, CURLOPT_CUSTOMREQUEST, put_c)
 	}
 
+	body_c: cstring
 	if has_body && (method == .POST || method == .PUT) {
-		body_c := to_cstring(body, allocator)
-		defer free_cstring(body_c, allocator)
+		body_c = to_cstring(body, allocator)
 		_ = easy_setopt(handle, CURLOPT_POSTFIELDS, body_c)
 	}
+	defer if body_c != nil { free_cstring(body_c, allocator) }
 
 	// Headers: Accept + Content-Type (when body), plus auth. curl_slist_append
 	// copies its string argument, so the cstring only needs to live for the
@@ -206,17 +211,17 @@ curl_perform :: proc(
 
 	// Bearer token takes precedence over basic auth.
 	if token != "" {
-		auth_hdr := fmt.tprintf("Authorization: Bearer %s", token)
+		auth_hdr := fmt.aprintf("Authorization: Bearer %s", token)
 		auth_c := to_cstring(auth_hdr, allocator)
 		defer free_string(auth_hdr, allocator)
 		defer free_cstring(auth_c, allocator)
 		headers = slist_append(headers, auth_c)
 	} else if username != "" {
-		creds := fmt.tprintf("%s:%s", username, password)
+		creds := fmt.aprintf("%s:%s", username, password)
 		defer free_string(creds, allocator)
 		creds_b64 := base64_encode(creds, allocator)
 		defer free_string(creds_b64, allocator)
-		auth_hdr := fmt.tprintf("Authorization: Basic %s", creds_b64)
+		auth_hdr := fmt.aprintf("Authorization: Basic %s", creds_b64)
 		defer free_string(auth_hdr, allocator)
 		auth_c := to_cstring(auth_hdr, allocator)
 		defer free_cstring(auth_c, allocator)
@@ -233,14 +238,14 @@ curl_perform :: proc(
 
 	// Don't fold response headers into the body; don't follow redirects (the
 	// client maps 3xx to a transport error category).
-	_ = easy_setopt(handle, CURLOPT_HEADER, 0)
-	_ = easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0)
+	_ = easy_setopt(handle, CURLOPT_HEADER, c.long(0))
+	_ = easy_setopt(handle, CURLOPT_FOLLOWLOCATION, c.long(0))
 
 	// Timeouts: cap the connection phase and the whole transfer so a missing
 	// or stalled daemon cannot hang the caller indefinitely (curl's default
 	// timeout is 0 = forever).
-	_ = easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 10)
-	_ = easy_setopt(handle, CURLOPT_TIMEOUT, 30)
+	_ = easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, c.long(10))
+	_ = easy_setopt(handle, CURLOPT_TIMEOUT, c.long(30))
 
 	rc := easy_perform(handle)
 	if rc != CURLE_OK { return nil, 0, false }

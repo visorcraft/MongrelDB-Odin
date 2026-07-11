@@ -34,9 +34,9 @@ main :: proc() {
 	// Unique table name + idempotency key per run so concurrent/repeated runs
 	// never collide and retry logic isn't confused with a prior run's batch.
 	ts := os.get_pid()
-	table := fmt.tprintf("example_txn_%d", ts)
+	table := fmt.aprintf("example_txn_%d", ts)
 	defer m.free_string(table)
-	idempotency_key := fmt.tprintf("example-txn-%d", ts)
+	idempotency_key := fmt.aprintf("example-txn-%d", ts)
 	defer m.free_string(idempotency_key)
 
 	// Always drop the table on exit.
@@ -86,6 +86,7 @@ main :: proc() {
 		fmt.eprintf("commit failed: %s\n", m.mongrel_error_string(cmerr))
 		os.exit(1)
 	}
+	defer free_rows(results)
 	fmt.printfln("Committed atomically: %d operations applied", len(results))
 
 	after_commit, _ := m.count(db, table)
@@ -131,4 +132,9 @@ main :: proc() {
 	}
 	after_dup, _ := m.count(db, table)
 	fmt.printfln("After duplicate idempotent commit (same key): %d rows (no double-apply)", after_dup)
+}
+
+free_rows :: proc(rows: []m.JSONValue) {
+	for row in rows { m.json_destroy(row) }
+	m.free_slice(rows)
 }

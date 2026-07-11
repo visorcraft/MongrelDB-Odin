@@ -75,15 +75,18 @@ json_object_make :: proc(allocator := context.allocator) -> JSONObject {
 }
 
 // json_object_set sets `key` to `value`, preserving insertion order. If the
-// key already exists, its value is replaced in place.
-json_object_set :: proc(o: ^JSONObject, key: string, value: JSONValue) {
+// key already exists, its value is replaced in place. The object takes
+// ownership of a cloned copy of `key`; callers may pass string literals.
+json_object_set :: proc(o: ^JSONObject, key: string, value: JSONValue, allocator := context.allocator) {
 	for i in 0..<len(o.keys) {
 		if o.keys[i] == key {
+			json_destroy(o.values[i], allocator)
 			o.values[i] = value
 			return
 		}
 	}
-	append(&o.keys, key)
+	k, _ := strings.clone(key, allocator)
+	append(&o.keys, k)
 	append(&o.values, value)
 }
 
@@ -102,9 +105,10 @@ json_object_len :: proc(o: JSONObject) -> int {
 	return len(o.keys)
 }
 
-// json_object_destroy releases the object's dynamic storage. Does NOT free
-// nested values (callers own those).
-json_object_destroy :: proc(o: JSONObject) {
+// json_object_destroy releases the object's dynamic storage, including the
+// cloned key strings. Does NOT free nested values (callers own those).
+json_object_destroy :: proc(o: JSONObject, allocator := context.allocator) {
+	for k in o.keys { free_string(k, allocator) }
 	free_dyn(o.keys)
 	free_dyn(o.values)
 }
@@ -121,7 +125,7 @@ json_destroy :: proc(v: JSONValue, allocator := context.allocator) {
 		for i in 0..<len(val.keys) {
 			json_destroy(val.values[i], allocator)
 		}
-		json_object_destroy(val)
+		json_object_destroy(val, allocator)
 	case JSONString:
 		// Strings are slices; only free if the caller cloned them. We assume
 		// parser-produced strings are owned and free them here. Caller-built
@@ -130,6 +134,31 @@ json_destroy :: proc(v: JSONValue, allocator := context.allocator) {
 		free_string(val, allocator)
 	case:
 		// scalars - nothing to free
+	}
+}
+
+// json_clone recursively deep-copies a JSON value. The returned value owns all
+// of its dynamic storage in `allocator` and can be destroyed independently.
+json_clone :: proc(v: JSONValue, allocator := context.allocator) -> JSONValue {
+	#partial switch val in v {
+	case JSONArray:
+		out := make([dynamic]JSONValue, 0, len(val), allocator)
+		for item in val {
+			append(&out, json_clone(item, allocator))
+		}
+		return JSONArray(out)
+	case JSONObject:
+		out := json_object_make(allocator)
+		for i in 0..<len(val.keys) {
+			cloned := json_clone(val.values[i], allocator)
+			json_object_set(&out, val.keys[i], cloned, allocator)
+		}
+		return out
+	case JSONString:
+		s, _ := strings.clone(string(val), allocator)
+		return JSONString(s)
+	case:
+		return v
 	}
 }
 
@@ -291,7 +320,8 @@ parse_object :: proc(p: ^Parser) -> (JSONValue, string) {
 			json_destroy(o, p.allocator)
 			return nil, err2
 		}
-		json_object_set(&o, key, v)
+		json_object_set(&o, key, v, p.allocator)
+		free_string(key, p.allocator)
 		skip_ws(p)
 		if p.pos >= len(p.data) {
 			json_destroy(o, p.allocator)

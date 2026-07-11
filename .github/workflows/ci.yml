@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Install libcurl (HTTP transport)
         run: |
@@ -61,7 +61,7 @@ jobs:
           for tf in tests/*.odin; do
             echo "=== Type-checking $tf ==="
             odin build "$tf" -file -collection:mdb=. -out:build/test_check \
-              -define:ODIN_TEST_THREADS=4 2>&1 || true
+              -define:ODIN_TEST_THREADS=4 -vet -strict-style
           done
 
   live:
@@ -72,7 +72,7 @@ jobs:
       MONGRELDB_URL: http://127.0.0.1:8453
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Install libcurl (HTTP transport)
         run: |
@@ -102,7 +102,7 @@ jobs:
 
       - name: Cache mongreldb-server binary
         id: server-cache
-        uses: actions/cache@v6
+        uses: actions/cache@v4
         with:
           path: bin/mongreldb-server
           key: mongreldb-server-linux-x64-${{ env.SERVER_VERSION }}
@@ -137,11 +137,10 @@ jobs:
           for tf in tests/*.odin; do
             echo "=== Type-checking $tf ==="
             odin build "$tf" -file -collection:mdb=. -out:build/live_test_check \
-              -define:ODIN_TEST_THREADS=4 2>&1 || true
+              -define:ODIN_TEST_THREADS=4 -vet -strict-style
           done
 
       - name: Run examples
-        continue-on-error: true
         run: |
           ./build/basic_crud
           ./build/query_builder
