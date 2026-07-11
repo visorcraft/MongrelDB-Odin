@@ -218,6 +218,7 @@ case:              fmt.eprintf("query/server error: %s\n", m.mongrel_error_strin
 | `health(db) -> (bool, Mongrel_Error)` | Check daemon health |
 | `table_names(db) -> ([]string, Mongrel_Error)` | List table names |
 | `create_table(db, name, columns) -> (i64, Mongrel_Error)` | Create a table; returns the table id |
+| `create_table_with_constraints(db, name, columns, constraints) -> (i64, Mongrel_Error)` | Create a table and attach the top-level engine constraints JSON object |
 | `drop_table(db, name) -> Mongrel_Error` | Drop a table |
 | `count(db, table) -> (i64, Mongrel_Error)` | Row count |
 | `put(db, table, cells, key) -> (JSONValue, Mongrel_Error)` | Insert a row |

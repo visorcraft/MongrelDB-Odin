@@ -201,6 +201,7 @@ You should see a row count of 1.
 | `connect(url, options)` | Builds an HTTP client targeting one daemon. The `Client` is a value type carrying the base URL and credentials. |
 | `health(db)` | GET `/health`; returns `(true, .None_)` when the daemon answers. Always check before real work. |
 | `create_table(db, name, cols)` | POST `/kit/create_table`. Column `id`s are the on-wire identifiers; use them everywhere else. |
+| `create_table_with_constraints(db, name, cols, constraints)` | Same request with a top-level engine constraints JSON object, such as `checks`. |
 | `col.has_enum / enum_variants` | Optional. Constrains a text column to a fixed value set; server-enforced on commit, surfaces as `.Conflict` on a row outside the set. Absent when `has_enum` is false. |
 | `col.has_default / default_value` | Optional. Default value string for the column. Absent when `has_default` is false. The server's `default_expr` field name is also accepted. |
 | `put(db, table, cells, key)` | Single-op transaction: POST `/kit/txn` with one `put` op. `cells` is flattened to `[col_id, val, ...]`. |

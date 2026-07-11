@@ -167,16 +167,37 @@ table_names :: proc(db: Client, allocator := context.allocator) -> ([]string, Mo
 // create_table creates a table named `name` with the given columns and
 // returns the assigned table id.
 create_table :: proc(db: Client, name: string, columns: []Column, allocator := context.allocator) -> (i64, Mongrel_Error) {
+	return create_table_impl(db, name, columns, JSONNull{}, false, allocator)
+}
+
+// create_table_with_constraints creates a table and adds the supplied
+// top-level engine constraints object, for example
+// `{checks: [{name = "id_present", expr = ...}]}`. The caller retains
+// ownership of `constraints`.
+create_table_with_constraints :: proc(db: Client, name: string, columns: []Column, constraints: JSONValue, allocator := context.allocator) -> (i64, Mongrel_Error) {
+	return create_table_impl(db, name, columns, constraints, true, allocator)
+}
+
+// create_table_payload builds the request object and its owned column array.
+// The returned constraints value is borrowed and remains owned by the caller.
+create_table_payload :: proc(name: string, columns: []Column, constraints: JSONValue, include_constraints: bool, allocator := context.allocator) -> (JSONObject, [dynamic]JSONValue) {
 	cols := make([dynamic]JSONValue, 0, len(columns), allocator)
 	for c in columns {
 		append(&cols, column_to_value(c, allocator))
 	}
-	defer json_destroy(JSONArray(cols), allocator)
-
 	obj := json_object_make(allocator)
-	defer json_object_destroy(obj)
 	json_object_set(&obj, "name", jstr(name, allocator))
 	json_object_set(&obj, "columns", JSONArray(cols))
+	if include_constraints {
+		json_object_set(&obj, "constraints", constraints)
+	}
+	return obj, cols
+}
+
+create_table_impl :: proc(db: Client, name: string, columns: []Column, constraints: JSONValue, include_constraints: bool, allocator: mem.Allocator) -> (i64, Mongrel_Error) {
+	obj, cols := create_table_payload(name, columns, constraints, include_constraints, allocator)
+	defer json_destroy(JSONArray(cols), allocator)
+	defer json_object_destroy(obj)
 	payload := obj
 
 	body, err := raw_request(db, allocator, .POST, "/kit/create_table", payload)

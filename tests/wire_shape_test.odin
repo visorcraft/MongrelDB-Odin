@@ -100,6 +100,27 @@ column_to_json_omits_empty_enum :: proc(t: ^testing.T) {
 }
 
 @(test)
+create_table_payload_emits_constraints :: proc(t: ^testing.T) {
+	// The constraints branch must survive payload construction even when the
+	// object carries a real checks array. The HTTP path uses the same helper.
+	constraints := m.json_object_make()
+	check := m.json_object_make()
+	m.json_object_set(&check, "id", m.int_value(1))
+	m.json_object_set(&check, "name", m.string_value("id_present"))
+	checks := make([dynamic]m.JSONValue)
+	append(&checks, check)
+	m.json_object_set(&constraints, "checks", m.JSONArray(checks))
+	obj, cols := m.create_table_payload("events", nil, constraints, true)
+	defer m.json_object_destroy(obj)
+	defer m.json_destroy(m.JSONArray(cols))
+	wire := m.json_to_string(obj)
+	defer m.free_string(wire)
+	testing.expectf(t, contains(wire, "\"constraints\":{\"checks\":["),
+		"expected top-level constraints.checks, got %s", wire)
+	m.json_destroy(constraints)
+}
+
+@(test)
 url_path_escape_escapes_spaces_and_slashes :: proc(t: ^testing.T) {
 	esc := m.url_path_escape("my table/with spaces")
 	defer m.free_string(esc)
