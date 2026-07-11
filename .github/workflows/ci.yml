@@ -60,8 +60,11 @@ jobs:
       - name: Build library (warning-clean, vetted)
         # The library lives in the `mongreldb/` directory as `package mongreldb`.
         # `odin build mongreldb` compiles the whole package; `-vet` lints and
-        # `-strict-style` keeps the style machine-checked.
+        # `-strict-style` keeps the style machine-checked. The output directory
+        # must exist before Odin writes to it, otherwise Odin aborts with
+        # 'LLVM Error: No such file or directory' (odin-lang/Odin#4958).
         run: |
+          mkdir -p build
           odin build mongreldb -build-mode:lib \
             -out:build/lib_check -vet -strict-style
 
