@@ -130,7 +130,7 @@ cell_float64 :: proc(row: m.JSONValue, col_id: i64) -> (f64, bool) {
 	}
 }
 
-// ── Tests (the 14-operation conformance matrix) ───────────────────────────
+// ── Tests (the 16-operation conformance matrix) ───────────────────────────
 
 @(test)
 test_health :: proc(t: ^testing.T) {
@@ -462,6 +462,55 @@ test_error_type_carries_status :: proc(t: ^testing.T) {
 	// A second lookup also maps the 404 status to the typed Not_Found error.
 	_, err := m.schema_for(c^, name)
 	testing.expectf(t, err == .Not_Found, "expected Not_Found, got %s", m.mongrel_error_string(err))
+}
+
+@(test)
+test_history_retention_get_and_set :: proc(t: ^testing.T) {
+	c := client()
+	if c == nil { return }
+
+	// Read the current window and earliest epoch.
+	window, err1 := m.history_retention_epochs(c^)
+	testing.expectf(t, err1 == .None_, "history_retention_epochs err: %s", m.mongrel_error_string(err1))
+	earliest, err2 := m.earliest_retained_epoch(c^)
+	testing.expectf(t, err2 == .None_, "earliest_retained_epoch err: %s", m.mongrel_error_string(err2))
+
+	// Update the window and read it back.
+	new_window := window + 1
+	hr, err3 := m.set_history_retention_epochs(c^, new_window)
+	testing.expectf(t, err3 == .None_, "set_history_retention_epochs err: %s", m.mongrel_error_string(err3))
+	testing.expect(t, hr.history_retention_epochs == new_window)
+
+	// Restore the original window.
+	_, err4 := m.set_history_retention_epochs(c^, window)
+	testing.expectf(t, err4 == .None_, "restore retention err: %s", m.mongrel_error_string(err4))
+}
+
+@(test)
+test_history_retention_as_of_epoch_read :: proc(t: ^testing.T) {
+	c := client()
+	if c == nil { return }
+	name := unique_table("odin_ret")
+	defer {
+		_ = m.drop_table(c^, name)
+		m.free_string(name)
+	}
+	fresh_table(c^, name, {int_col(1, "id", true), int_col(2, "amount", false)}, t)
+
+	// Remember the current earliest readable epoch.
+	earliest_before, err1 := m.earliest_retained_epoch(c^)
+	testing.expectf(t, err1 == .None_, "earliest err: %s", m.mongrel_error_string(err1))
+
+	// Insert a row.
+	must_put(t, c^, name, {{id = 1, value = m.int_value(1)}, {id = 2, value = m.int_value(100)}})
+
+	// The row is readable at the epoch captured before the write.
+	stmt := fmt.tprintf("SELECT id, amount FROM %s AS OF EPOCH %d", name, earliest_before)
+	defer m.free_string(stmt)
+	rows, err2 := m.sql(c^, stmt)
+	testing.expectf(t, err2 == .None_, "AS OF EPOCH read err: %s", m.mongrel_error_string(err2))
+	// The table did not exist at earliest_before, so the SELECT returns no rows.
+	testing.expect(t, len(rows) == 0)
 }
 
 // `odin test tests -collection:mdb=.` discovers and runs every

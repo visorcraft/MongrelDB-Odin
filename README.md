@@ -34,7 +34,8 @@
 - **Typed CRUD** over the Kit transaction endpoint: `put` (with optional idempotency keys for safe retries), `upsert` (insert-or-update on PK conflict), and `delete`/`delete_by_pk` by row id or primary key. Cells are a `{column_id, JSONValue}` pair flattened to the server's on-wire `[col_id, value, ...]` array.
 - **Fluent query builder** that pushes conditions down to the engine's specialized indexes for sub-millisecond lookups: primary key, learned-range, bitmap equality, null checks, and FM-index full-text search. Friendly aliases (`column` -> `column_id`, `min`/`max` -> `lo`/`hi`) are translated to the server's on-wire keys.
 - **Idempotent batch transactions** - operations staged locally on a `Transaction` and committed atomically, with the engine enforcing unique, foreign-key, and check constraints at commit time. Idempotency keys return the original response on duplicate commits, even after a crash.
-- **Full SQL access** through the DataFusion-backed `/sql` endpoint (JSON format requested): recursive CTEs, window functions, `CREATE TABLE AS SELECT`, materialized views, and multi-statement execution.
+- **Full SQL access** through the DataFusion-backed `/sql` endpoint (JSON format requested): recursive CTEs, window functions, `CREATE TABLE AS SELECT`, and multi-statement execution.
+- **History retention** controls: get and set the history window, query older epochs with `AS OF EPOCH`, and read the earliest retained epoch.
 - **Schema management**: typed table creation, full schema catalog (`map[string]JSONValue`), and per-table descriptors.
 - **Typed errors**: a single `Mongrel_Error` enum you `switch` on - `.Auth` (401/403), `.Not_Found` (404), `.Conflict` (409), `.Query` (everything else non-2xx), `.Http` (transport), `.Json` (malformed response), plus `.Response_Too_Large` and `.Already_Committed`.
 - **Self-contained JSON layer** - a local `JSONValue` union, ordered-object type, strict recursive-descent parser, and compact serializer. No dependency on any particular version of `core:encoding/json`.
@@ -230,6 +231,10 @@ case:              fmt.eprintf("query/server error: %s\n", m.mongrel_error_strin
 | `sql(db, sql) -> ([]JSONValue, Mongrel_Error)` | Execute SQL |
 | `schema(db) -> (map[string]JSONValue, Mongrel_Error)` | Full schema catalog |
 | `schema_for(db, table) -> (JSONValue, Mongrel_Error)` | Single-table descriptor |
+| `history_retention(db) -> (History_Retention, Mongrel_Error)` | Get the full retention response |
+| `history_retention_epochs(db) -> (u64, Mongrel_Error)` | Get the history window size |
+| `earliest_retained_epoch(db) -> (u64, Mongrel_Error)` | Get the oldest readable epoch |
+| `set_history_retention_epochs(db, epochs) -> (History_Retention, Mongrel_Error)` | Set the history window |
 
 ### `QueryBuilder`
 
@@ -282,7 +287,7 @@ odin run examples/basic_crud.odin -file -collection:mdb=. -out:bin/basic_crud
 ./bin/basic_crud
 ```
 
-The test suite is a live integration suite: against a running `mongreldb-server` daemon it exercises the full client surface (a 14-operation conformance matrix). It also carries a pure wire-shape test that needs no daemon. Live tests self-skip when no daemon is reachable, so `odin test tests` is safe to run offline.
+The test suite is a live integration suite: against a running `mongreldb-server` daemon it exercises the full client surface (a 16-operation conformance matrix). It also carries a pure wire-shape test that needs no daemon. Live tests self-skip when no daemon is reachable, so `odin test tests` is safe to run offline.
 
 Fetch a prebuilt server binary from the [MongrelDB releases](https://github.com/visorcraft/MongrelDB/releases):
 
@@ -322,7 +327,23 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full guide.
 
 ## History retention
 
-Use `history_retention`, `set_history_retention_epochs`, and the returned `earliest_retained_epoch` with MongrelDB 0.48.0+.
+Control how far back time-travel queries can read. The window is measured in
+epochs (monotonically increasing commit numbers).
+
+```odin
+window, err := m.history_retention_epochs(db)
+if err != .None_ { panic(m.mongrel_error_string(err)) }
+fmt.printf("retain %d epochs\n", window)
+
+new_hr, err := m.set_history_retention_epochs(db, 1000)
+if err != .None_ { panic(m.mongrel_error_string(err)) }
+fmt.printf("window: %d, earliest: %d\n", new_hr.history_retention_epochs, new_hr.earliest_retained_epoch)
+
+// Query an older epoch.
+rows, err := m.sql(db, "SELECT id, amount FROM orders AS OF EPOCH 5")
+```
+
+Increasing retention cannot restore epochs that have already been pruned.
 
 ## License
 

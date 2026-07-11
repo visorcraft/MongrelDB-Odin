@@ -139,7 +139,7 @@ main :: proc() {
 		{id = 1, name = "id", ty = "int64", primary_key = true},
 		{id = 2, name = "customer", ty = "varchar"},
 		{id = 3, name = "amount", ty = "float64"},
-		{id = 4, name = "status", ty = "varchar",
+		{id = 4, name = "status", ty = "enum",
 			has_enum = true, enum_variants = status_variants,
 			has_default = true, default_value = "active"},
 	}
@@ -182,6 +182,14 @@ main :: proc() {
 	// 6. Count the rows.
 	n, _ := m.count(db, "orders")
 	fmt.printf("total rows: %lld\n", n)
+
+	// 7. Read and optionally adjust the history retention window.
+	window, err := m.history_retention_epochs(db)
+	if err != .None_ {
+		fmt.eprintf("history retention: %s\n", m.mongrel_error_string(err))
+		return
+	}
+	fmt.printf("history retention epochs: %d\n", window)
 }
 ```
 

@@ -160,6 +160,34 @@ history_retention :: proc(db: Client, allocator := context.allocator) -> (Histor
 	value, jerr := json_parse(body, allocator)
 	if jerr != "" { return {}, .Json }
 	defer json_destroy(value, allocator)
+	return parse_history_retention(value)
+}
+
+// history_retention_epochs returns the current history retention window size.
+history_retention_epochs :: proc(db: Client, allocator := context.allocator) -> (u64, Mongrel_Error) {
+	hr, err := history_retention(db, allocator)
+	if err != .None_ { return 0, err }
+	return hr.history_retention_epochs, .None_
+}
+
+// earliest_retained_epoch returns the oldest readable epoch.
+earliest_retained_epoch :: proc(db: Client, allocator := context.allocator) -> (u64, Mongrel_Error) {
+	hr, err := history_retention(db, allocator)
+	if err != .None_ { return 0, err }
+	return hr.earliest_retained_epoch, .None_
+}
+
+// history_retention_payload builds the PUT body for set_history_retention_epochs.
+// Exposed for wire-shape tests.
+history_retention_payload :: proc(epochs: u64, allocator := context.allocator) -> JSONObject {
+	payload := json_object_make(allocator)
+	json_object_set(&payload, "history_retention_epochs", int_value(i64(epochs)))
+	return payload
+}
+
+// parse_history_retention extracts the response fields from a parsed JSON value.
+// Exposed for wire-shape tests.
+parse_history_retention :: proc(value: JSONValue) -> (History_Retention, Mongrel_Error) {
 	o, ok := value.(JSONObject)
 	if !ok { return {}, .Json }
 	h, hok := json_object_get(o, "history_retention_epochs")
@@ -171,23 +199,15 @@ history_retention :: proc(db: Client, allocator := context.allocator) -> (Histor
 }
 
 set_history_retention_epochs :: proc(db: Client, epochs: u64, allocator := context.allocator) -> (History_Retention, Mongrel_Error) {
-	payload := json_object_make(allocator)
+	payload := history_retention_payload(epochs, allocator)
 	defer json_object_destroy(payload)
-	json_object_set(&payload, "history_retention_epochs", int_value(i64(epochs)))
 	body, err := raw_request(db, allocator, .PUT, "/history/retention", payload)
 	if err != .None_ { return {}, err }
 	defer free_slice(body, allocator)
 	value, jerr := json_parse(body, allocator)
 	if jerr != "" { return {}, .Json }
 	defer json_destroy(value, allocator)
-	o, ok := value.(JSONObject)
-	if !ok { return {}, .Json }
-	h, _ := json_object_get(o, "history_retention_epochs")
-	e, _ := json_object_get(o, "earliest_retained_epoch")
-	hi, hiok := h.(JSONInteger)
-	ei, eiok := e.(JSONInteger)
-	if !hiok || !eiok { return {}, .Json }
-	return {u64(hi), u64(ei)}, .None_
+	return parse_history_retention(value)
 }
 
 // table_names lists all table names in the database.

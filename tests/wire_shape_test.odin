@@ -147,6 +147,89 @@ column_to_json_emits_dynamic_default_expr :: proc(t: ^testing.T) {
 }
 
 @(test)
+column_to_json_full_static_default_matrix :: proc(t: ^testing.T) {
+	// The full static-default matrix: string, integer, boolean, explicit null,
+	// a literal "now" string, and default_expr. Each must preserve its JSON
+	// type on the wire and default_expr must suppress any default_value.
+	string_col := m.Column{
+		id = 10, name = "status", ty = "varchar",
+		has_default = true, default_value = "draft",
+	}
+	number_col := m.Column{
+		id = 11, name = "retries", ty = "int64",
+		has_default_scalar = true, default_scalar = m.int_value(7),
+	}
+	bool_col := m.Column{
+		id = 12, name = "enabled", ty = "bool",
+		has_default_scalar = true, default_scalar = m.bool_value(true),
+	}
+	null_col := m.Column{
+		id = 13, name = "optional", ty = "varchar",
+		has_default_scalar = true, default_scalar = m.null_value(),
+	}
+	literal_now_col := m.Column{
+		id = 14, name = "tag", ty = "varchar",
+		has_default = true, default_value = "now",
+	}
+	expr_col := m.Column{
+		id = 15, name = "created_at", ty = "timestamp_nanos",
+		has_default_expr = true, default_expr = "now",
+	}
+
+	string_json := m.column_to_json_string(string_col)
+	number_json := m.column_to_json_string(number_col)
+	bool_json := m.column_to_json_string(bool_col)
+	null_json := m.column_to_json_string(null_col)
+	literal_json := m.column_to_json_string(literal_now_col)
+	expr_json := m.column_to_json_string(expr_col)
+	defer m.free_string(string_json)
+	defer m.free_string(number_json)
+	defer m.free_string(bool_json)
+	defer m.free_string(null_json)
+	defer m.free_string(literal_json)
+	defer m.free_string(expr_json)
+
+	testing.expect(t, contains(string_json, "\"default_value\":\"draft\""))
+	testing.expect(t, contains(number_json, "\"default_value\":7"))
+	testing.expect(t, contains(bool_json, "\"default_value\":true"))
+	testing.expect(t, contains(null_json, "\"default_value\":null"))
+	testing.expect(t, contains(literal_json, "\"default_value\":\"now\""))
+	testing.expect(t, contains(expr_json, "\"default_expr\":\"now\""))
+	testing.expect(t, !contains(expr_json, "default_value"))
+}
+
+@(test)
+history_retention_payload_emits_exact_key :: proc(t: ^testing.T) {
+	payload := m.history_retention_payload(42)
+	defer m.json_object_destroy(payload)
+	wire := m.json_to_string(m.JSONObject(payload))
+	defer m.free_string(wire)
+	testing.expectf(t, contains(wire, "\"history_retention_epochs\":42"),
+		"expected history_retention_epochs key, got %s", wire)
+	testing.expect(t, !contains(wire, "earliest_retained_epoch"))
+}
+
+@(test)
+parse_history_retention_requires_both_keys :: proc(t: ^testing.T) {
+	// Full response decodes both u64 fields.
+	full := m.json_object_make()
+	defer m.json_object_destroy(full)
+	m.json_object_set(&full, "history_retention_epochs", m.int_value(100))
+	m.json_object_set(&full, "earliest_retained_epoch", m.int_value(7))
+	hr, err := m.parse_history_retention(m.JSONObject(full))
+	testing.expectf(t, err == .None_, "unexpected error: %s", m.mongrel_error_string(err))
+	testing.expect(t, hr.history_retention_epochs == 100)
+	testing.expect(t, hr.earliest_retained_epoch == 7)
+
+	// Missing key must fail with .Json.
+	missing := m.json_object_make()
+	defer m.json_object_destroy(missing)
+	m.json_object_set(&missing, "history_retention_epochs", m.int_value(100))
+	_, err2 := m.parse_history_retention(m.JSONObject(missing))
+	testing.expectf(t, err2 == .Json, "expected Json error, got %s", m.mongrel_error_string(err2))
+}
+
+@(test)
 create_table_payload_emits_constraints :: proc(t: ^testing.T) {
 	// The constraints branch must survive payload construction even when the
 	// object carries a real checks array. The HTTP path uses the same helper.
