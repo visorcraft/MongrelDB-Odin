@@ -85,9 +85,11 @@ jobs:
         # `odin test tests` discovers and runs every `@(test)` proc in the
         # `mongreldb_test` package. Without a daemon the live tests
         # short-circuit (return early), so only the pure wire-shape conformance
-        # tests actually assert here.
+        # tests actually assert here. -o:minimal skips LLVM optimization passes
+        # (vetting/style already checked in the build step) to keep compile
+        # time reasonable on the runner.
         run: |
-          odin test tests -collection:mdb=. -vet -strict-style \
+          odin test tests -collection:mdb=. -o:minimal \
             -define:ODIN_TEST_THREADS=4
 
   live:
@@ -182,7 +184,7 @@ jobs:
 
       - name: Run live test suite
         run: |
-          odin test tests -collection:mdb=. -vet -strict-style \
+          odin test tests -collection:mdb=. -o:minimal \
             -define:ODIN_TEST_THREADS=4
 
       - name: Run examples
