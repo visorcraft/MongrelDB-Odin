@@ -19,59 +19,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install libcurl (HTTP transport) and LLVM (Odin backend)
-        # Odin's `build_odin.sh release` links against LLVM, which needs the
-        # -dev packages (providing llvm-config + libLLVM) that the stock runner
-        # image does not ship. Without them the compiler segfaults at build
-        # time with `LLVM Error: No such file or directory`. Current Odin
-        # (dev-2026-07) references LLVMFastMathFlags which was removed from
-        # the LLVM C API in LLVM 18, so LLVM >= 18 is required. The runner is
-        # ubuntu-24.04 (noble); pull LLVM 18 from the official apt.llvm.org
-        # noble repository.
+      - name: Install libcurl (HTTP transport)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libcurl4-openssl-dev wget gnupg ca-certificates
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | \
-            sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-18 main" | \
-            sudo tee /etc/apt/sources.list.d/llvm.list >/dev/null
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            llvm-18-dev clang-18 libpolly-18-dev
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
 
-      - name: Install Odin
-        env:
-          # Point Odin's build script at the LLVM 18 toolchain we just installed.
-          LLVM_CONFIG: /usr/lib/llvm-18/bin/llvm-config
+      - name: Install Odin (prebuilt binary)
+        # Use the official prebuilt Odin binary instead of building from source
+        # (building from source takes 6+ hours and exceeds CI timeout).
         run: |
-          git clone --depth 1 https://github.com/odin-lang/Odin.git /opt/odin
-          (cd /opt/odin && ./build_odin.sh release)
-          # The Odin binary links libLLVM-18.so with rpath=$ORIGIN; expose the
-          # LLVM 18 lib dir to the dynamic loader, and put the LLVM 18 bin dir
-          # (lld/opt/llc) plus Odin itself on PATH for every subsequent step.
-          echo "LD_LIBRARY_PATH=/usr/lib/llvm-18/lib" >> "$GITHUB_ENV"
-          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+          curl -sSL -o /tmp/odin.tar.gz \
+            "https://github.com/odin-lang/Odin/releases/download/dev-2026-07a/odin-linux-amd64-dev-2026-07a.tar.gz"
+          mkdir -p /opt/odin
+          tar xzf /tmp/odin.tar.gz -C /opt/odin --strip-components=1
           echo "/opt/odin" >> "$GITHUB_PATH"
 
       - name: Print Odin version
         run: odin version
 
       - name: Build library (warning-clean, vetted)
-        # The library lives in the `mongreldb/` directory as `package mongreldb`.
-        # `odin build mongreldb` compiles the whole package; `-vet` lints and
-        # `-strict-style` keeps the style machine-checked. The output directory
-        # must exist before Odin writes to it, otherwise Odin aborts with
-        # 'LLVM Error: No such file or directory' (odin-lang/Odin#4958).
         run: |
           mkdir -p build
           odin build mongreldb -build-mode:lib \
             -out:build/lib_check -vet -strict-style
 
       - name: Build examples
-        # Examples are single-file packages (`-file`) that import the library
-        # via the `mdb` collection, which points at the repo root so the bare
-        # `mongreldb` package directory resolves: `-collection:mdb=.`
         run: |
           mkdir -p build
           for ex in examples/*.odin; do
@@ -82,18 +54,11 @@ jobs:
           done
 
       - name: Run offline tests (wire-shape; live tests self-skip)
-        # `odin test tests` discovers and runs every `@(test)` proc in the
-        # `mongreldb_test` package. Without a daemon the live tests
-        # short-circuit (return early), so only the pure wire-shape conformance
-        # tests actually assert here. -o:minimal skips LLVM optimization passes
-        # (vetting/style already checked in the build step) to keep compile
-        # time reasonable on the runner.
         run: |
           odin test tests -collection:mdb=. -o:minimal \
             -define:ODIN_TEST_THREADS=4
 
   live:
-    # Boots a real mongreldb-server and runs the full live round-trip suite.
     name: Live integration (against mongreldb-server)
     runs-on: ubuntu-latest
     env:
@@ -103,39 +68,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install libcurl (HTTP transport) and LLVM (Odin backend)
-        # Odin's `build_odin.sh release` links against LLVM, which needs the
-        # -dev packages (providing llvm-config + libLLVM) that the stock runner
-        # image does not ship. Without them the compiler segfaults at build
-        # time with `LLVM Error: No such file or directory`. Current Odin
-        # (dev-2026-07) references LLVMFastMathFlags which was removed from
-        # the LLVM C API in LLVM 18, so LLVM >= 18 is required. The runner is
-        # ubuntu-24.04 (noble); pull LLVM 18 from the official apt.llvm.org
-        # noble repository.
+      - name: Install libcurl (HTTP transport)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libcurl4-openssl-dev wget gnupg ca-certificates
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | \
-            sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-18 main" | \
-            sudo tee /etc/apt/sources.list.d/llvm.list >/dev/null
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            llvm-18-dev clang-18 libpolly-18-dev
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
 
-      - name: Install Odin
-        env:
-          # Point Odin's build script at the LLVM 18 toolchain we just installed.
-          LLVM_CONFIG: /usr/lib/llvm-18/bin/llvm-config
+      - name: Install Odin (prebuilt binary)
         run: |
-          git clone --depth 1 https://github.com/odin-lang/Odin.git /opt/odin
-          (cd /opt/odin && ./build_odin.sh release)
-          # The Odin binary links libLLVM-18.so with rpath=$ORIGIN; expose the
-          # LLVM 18 lib dir to the dynamic loader, and put the LLVM 18 bin dir
-          # (lld/opt/llc) plus Odin itself on PATH for every subsequent step.
-          echo "LD_LIBRARY_PATH=/usr/lib/llvm-18/lib" >> "$GITHUB_ENV"
-          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+          curl -sSL -o /tmp/odin.tar.gz \
+            "https://github.com/odin-lang/Odin/releases/download/dev-2026-07a/odin-linux-amd64-dev-2026-07a.tar.gz"
+          mkdir -p /opt/odin
+          tar xzf /tmp/odin.tar.gz -C /opt/odin --strip-components=1
           echo "/opt/odin" >> "$GITHUB_PATH"
 
       - name: Print Odin version
@@ -172,7 +115,6 @@ jobs:
           rm -rf /tmp/mongreldb-data
           ./bin/mongreldb-server /tmp/mongreldb-data --port 8453 > /tmp/mongreldb-server.log 2>&1 &
           echo $! > /tmp/mongreldb-server.pid
-          # Wait for the daemon to become healthy (max ~30s).
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8453/health >/dev/null 2>&1; then
               echo "mongreldb-server is healthy"
