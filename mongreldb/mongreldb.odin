@@ -148,6 +148,48 @@ health :: proc(db: Client, allocator := context.allocator) -> (bool, Mongrel_Err
 	return true, .None_
 }
 
+History_Retention :: struct {
+	history_retention_epochs: u64,
+	earliest_retained_epoch:  u64,
+}
+
+history_retention :: proc(db: Client, allocator := context.allocator) -> (History_Retention, Mongrel_Error) {
+	body, err := raw_request(db, allocator, .GET, "/history/retention", nil)
+	if err != .None_ { return {}, err }
+	defer free_slice(body, allocator)
+	value, jerr := json_parse(body, allocator)
+	if jerr != "" { return {}, .Json }
+	defer json_destroy(value, allocator)
+	o, ok := value.(JSONObject)
+	if !ok { return {}, .Json }
+	h, hok := json_object_get(o, "history_retention_epochs")
+	e, eok := json_object_get(o, "earliest_retained_epoch")
+	hi, hiok := h.(JSONInteger)
+	ei, eiok := e.(JSONInteger)
+	if !hok || !eok || !hiok || !eiok { return {}, .Json }
+	return {u64(hi), u64(ei)}, .None_
+}
+
+set_history_retention_epochs :: proc(db: Client, epochs: u64, allocator := context.allocator) -> (History_Retention, Mongrel_Error) {
+	payload := json_object_make(allocator)
+	defer json_object_destroy(payload)
+	json_object_set(&payload, "history_retention_epochs", int_value(i64(epochs)))
+	body, err := raw_request(db, allocator, .PUT, "/history/retention", payload)
+	if err != .None_ { return {}, err }
+	defer free_slice(body, allocator)
+	value, jerr := json_parse(body, allocator)
+	if jerr != "" { return {}, .Json }
+	defer json_destroy(value, allocator)
+	o, ok := value.(JSONObject)
+	if !ok { return {}, .Json }
+	h, _ := json_object_get(o, "history_retention_epochs")
+	e, _ := json_object_get(o, "earliest_retained_epoch")
+	hi, hiok := h.(JSONInteger)
+	ei, eiok := e.(JSONInteger)
+	if !hiok || !eiok { return {}, .Json }
+	return {u64(hi), u64(ei)}, .None_
+}
+
 // table_names lists all table names in the database.
 table_names :: proc(db: Client, allocator := context.allocator) -> ([]string, Mongrel_Error) {
 	body, err := raw_request(db, allocator, .GET, "/tables", nil)

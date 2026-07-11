@@ -24,6 +24,7 @@ import "core:strings"
 Method :: enum {
 	GET,
 	POST,
+	PUT,
 	DELETE,
 }
 
@@ -175,8 +176,13 @@ curl_perform :: proc(
 		defer free_cstring(del_c, allocator)
 		_ = easy_setopt(handle, CURLOPT_CUSTOMREQUEST, del_c)
 	}
+	if method == .PUT {
+		put_c := to_cstring("PUT", allocator)
+		defer free_cstring(put_c, allocator)
+		_ = easy_setopt(handle, CURLOPT_CUSTOMREQUEST, put_c)
+	}
 
-	if has_body && method == .POST {
+	if has_body && (method == .POST || method == .PUT) {
 		body_c := to_cstring(body, allocator)
 		defer free_cstring(body_c, allocator)
 		_ = easy_setopt(handle, CURLOPT_POSTFIELDS, body_c)

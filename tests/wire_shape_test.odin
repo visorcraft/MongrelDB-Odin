@@ -115,6 +115,18 @@ column_to_json_emits_numeric_default :: proc(t: ^testing.T) {
 }
 
 @(test)
+column_to_json_emits_bool_and_null_defaults :: proc(t: ^testing.T) {
+	bool_col := m.Column{id = 5, name = "enabled", ty = "bool", has_default_scalar = true, default_scalar = m.bool_value(true)}
+	null_col := m.Column{id = 6, name = "optional", ty = "string", has_default_scalar = true, default_scalar = m.null_value()}
+	bool_json := m.column_to_json_string(bool_col)
+	null_json := m.column_to_json_string(null_col)
+	defer m.free_string(bool_json)
+	defer m.free_string(null_json)
+	testing.expect(t, contains(bool_json, "\"default_value\":true"))
+	testing.expect(t, contains(null_json, "\"default_value\":null"))
+}
+
+@(test)
 column_to_json_emits_dynamic_default_expr :: proc(t: ^testing.T) {
 	col := m.Column{
 		id = 5,

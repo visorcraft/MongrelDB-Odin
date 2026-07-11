@@ -320,6 +320,10 @@ Contributions are welcome. Please:
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full guide.
 
+## History retention
+
+Use `history_retention`, `set_history_retention_epochs`, and the returned `earliest_retained_epoch` with MongrelDB 0.47.1+.
+
 ## License
 
 Dual-licensed under the **MIT License** or the **Apache License, Version 2.0**,
