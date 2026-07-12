@@ -312,6 +312,48 @@ parse_history_retention_rejects_missing_and_malformed_keys :: proc(t: ^testing.T
 	testing.expectf(t, err6 == .Json, "expected Json error for negative value, got %s", m.mongrel_error_string(err6))
 }
 
+// ── Transport-layer tests ──────────────────────────────────────────────────
+//
+// Odin has no in-process HTTP mock library and the client talks to libcurl via
+// C FFI, so the wire bytes are not directly observable from a test. Instead we
+// prove the public functions actually traverse the transport: pointing a Client
+// at a closed port (127.0.0.1:1 - nothing listens below 1024 without root, so
+// the kernel refuses the connection immediately) forces curl_perform to fail at
+// the network layer, which raw_request maps to `.Http`. A regression that
+// bypassed raw_request (e.g. a local-only stub returning a canned value) would
+// return `.None_` and these tests would fail.
+//
+// The exact PUT body key and the GET response keys are still asserted, but via
+// the pure helpers above: history_retention_payload_emits_exact_key covers the
+// PUT body, and parse_history_retention_rejects_missing_and_malformed_keys
+// covers both GET response keys (plus malformed inputs).
+
+@(test)
+set_history_retention_epochs_exercises_transport :: proc(t: ^testing.T) {
+	db := m.connect("http://127.0.0.1:1", m.Options{})
+	_, err := m.set_history_retention_epochs(db, 42)
+	testing.expectf(t, err == .Http,
+		"expected .Http from PUT /history/retention on closed port, got %s",
+		m.mongrel_error_string(err))
+}
+
+@(test)
+history_retention_getter_exercises_transport :: proc(t: ^testing.T) {
+	db := m.connect("http://127.0.0.1:1", m.Options{})
+
+	// The full GET response path.
+	_, err := m.history_retention(db)
+	testing.expectf(t, err == .Http,
+		"expected .Http from GET /history/retention on closed port, got %s",
+		m.mongrel_error_string(err))
+
+	// The epochs convenience wrapper must propagate the same transport error.
+	_, err2 := m.history_retention_epochs(db)
+	testing.expectf(t, err2 == .Http,
+		"expected .Http from history_retention_epochs on closed port, got %s",
+		m.mongrel_error_string(err2))
+}
+
 @(test)
 create_table_payload_emits_constraints :: proc(t: ^testing.T) {
 	// The constraints branch must survive payload construction even when the

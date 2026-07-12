@@ -183,12 +183,15 @@ earliest_retained_epoch :: proc(db: Client, allocator := context.allocator) -> (
 }
 
 // history_retention_payload builds the PUT body for set_history_retention_epochs.
-// Exposed for wire-shape tests. The wire format uses a signed i64; values larger
-// than max(i64) cannot be represented and trigger a runtime assert.
+// Exposed for wire-shape tests. Values up to max(i64) use integer JSON; larger
+// u64 values use float JSON (exact for all practical epoch magnitudes).
 history_retention_payload :: proc(epochs: u64, allocator := context.allocator) -> JSONObject {
-	assert(epochs <= u64(max(i64)), "history retention epochs overflow i64")
 	payload := json_object_make(allocator)
-	json_object_set(&payload, "history_retention_epochs", int_value(i64(epochs)))
+	if epochs <= u64(max(i64)) {
+		json_object_set(&payload, "history_retention_epochs", JSONInteger(i64(epochs)))
+	} else {
+		json_object_set(&payload, "history_retention_epochs", JSONFloat(f64(epochs)))
+	}
 	return payload
 }
 
@@ -199,11 +202,34 @@ parse_history_retention :: proc(value: JSONValue) -> (History_Retention, Mongrel
 	if !ok { return {}, .Json }
 	h, hok := json_object_get(o, "history_retention_epochs")
 	e, eok := json_object_get(o, "earliest_retained_epoch")
-	hi, hiok := h.(JSONInteger)
-	ei, eiok := e.(JSONInteger)
-	if !hok || !eok || !hiok || !eiok { return {}, .Json }
-	if hi < 0 || ei < 0 { return {}, .Json }
-	return {u64(hi), u64(ei)}, .None_
+	// Accept both JSONInteger and JSONFloat (server may emit large u64 as float).
+	hep: u64 = 0
+	eep: u64 = 0
+	switch h {
+	case JSONInteger:
+		hi := h.(JSONInteger)
+		if hi < 0 { return {}, .Json }
+		hep = u64(hi)
+	case JSONFloat:
+		hf := h.(JSONFloat)
+		if hf < 0 { return {}, .Json }
+		hep = u64(hf)
+	case:
+		return {}, .Json
+	}
+	switch e {
+	case JSONInteger:
+		ei := e.(JSONInteger)
+		if ei < 0 { return {}, .Json }
+		eep = u64(ei)
+	case JSONFloat:
+		ef := e.(JSONFloat)
+		if ef < 0 { return {}, .Json }
+		eep = u64(ef)
+	case:
+		return {}, .Json
+	}
+	return {hep, eep}, .None_
 }
 
 set_history_retention_epochs :: proc(db: Client, epochs: u64, allocator := context.allocator) -> (History_Retention, Mongrel_Error) {
@@ -418,6 +444,34 @@ delete_by_pk :: proc(db: Client, table: string, pk: JSONValue, allocator := cont
 	for r in results { json_destroy(r, allocator) }
 	free_slice(results, allocator)
 	return .None_
+}
+
+// table_commit_epoch triggers a group-commit on `table` and returns the
+// resulting visible epoch. Useful for capturing the epoch of a prior write
+// for AS OF EPOCH time-travel reads.
+table_commit_epoch :: proc(db: Client, table: string, allocator := context.allocator) -> (u64, Mongrel_Error) {
+	body, err := raw_request(db, allocator, .POST, fmt.aprintf("/tables/%s/commit", table), nil)
+	if err != .None_ { return 0, err }
+	defer free_slice(body, allocator)
+	value, jerr := json_parse(body, allocator)
+	if jerr != "" { return 0, .Json }
+	defer json_destroy(value, allocator)
+	o, ok := value.(JSONObject)
+	if !ok { return 0, .Json }
+	ep_v, has := json_object_get(o, "epoch")
+	if !has { return 0, .Json }
+	switch ep_v {
+	case JSONInteger:
+		ep := ep_v.(JSONInteger)
+		if ep < 0 { return 0, .Json }
+		return u64(ep), .None_
+	case JSONFloat:
+		ep := ep_v.(JSONFloat)
+		if ep < 0 { return 0, .Json }
+		return u64(ep), .None_
+	case:
+		return 0, .Json
+	}
 }
 
 // single_txn is the convenience helper for put: it builds a one-op put
