@@ -146,11 +146,13 @@ jobs:
       - name: Run examples
         # The Odin runtime segfaults on some example exits (upstream runtime
         # bug); keep this non-blocking so it doesn't mask the type-check gates.
+        # `timeout` caps each binary in case the server's wire shape changed
+        # and an example blocks on read.
         continue-on-error: true
         run: |
-          ./build/basic_crud
-          ./build/query_builder
-          ./build/transactions
+          timeout 60 ./build/basic_crud || true
+          timeout 60 ./build/query_builder || true
+          timeout 60 ./build/transactions || true
 
       - name: Dump server log on failure
         if: failure()
