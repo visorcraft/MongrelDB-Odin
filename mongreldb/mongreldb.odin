@@ -202,10 +202,11 @@ parse_history_retention :: proc(value: JSONValue) -> (History_Retention, Mongrel
 	if !ok { return {}, .Json }
 	h, hok := json_object_get(o, "history_retention_epochs")
 	e, eok := json_object_get(o, "earliest_retained_epoch")
+	if !hok || !eok { return {}, .Json }
 	// Accept both JSONInteger and JSONFloat (server may emit large u64 as float).
 	hep: u64 = 0
 	eep: u64 = 0
-	switch h {
+	#partial switch _ in h {
 	case JSONInteger:
 		hi := h.(JSONInteger)
 		if hi < 0 { return {}, .Json }
@@ -217,7 +218,7 @@ parse_history_retention :: proc(value: JSONValue) -> (History_Retention, Mongrel
 	case:
 		return {}, .Json
 	}
-	switch e {
+	#partial switch _ in e {
 	case JSONInteger:
 		ei := e.(JSONInteger)
 		if ei < 0 { return {}, .Json }
@@ -460,7 +461,7 @@ table_commit_epoch :: proc(db: Client, table: string, allocator := context.alloc
 	if !ok { return 0, .Json }
 	ep_v, has := json_object_get(o, "epoch")
 	if !has { return 0, .Json }
-	switch ep_v {
+	#partial switch _ in ep_v {
 	case JSONInteger:
 		ep := ep_v.(JSONInteger)
 		if ep < 0 { return 0, .Json }
