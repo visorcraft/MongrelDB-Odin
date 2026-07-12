@@ -57,13 +57,13 @@ jobs:
         # Compile the test files to verify they type-check against the library.
         # We don't execute them because `odin test` compilation through LLVM
         # debug mode takes 20+ minutes on CI runners. Tests are verified locally.
-        # ODIN_TEST=true makes `odin build` synthesize the @(test) runner entry
-        # point so files without an explicit `main` link cleanly.
+        # -build-mode:object skips linking, so files containing only @(test)
+        # procs (no main) still type-check cleanly without an entry point.
         run: |
           for tf in tests/*.odin; do
             echo "=== Type-checking $tf ==="
-            odin build "$tf" -file -collection:mdb=. -out:build/test_check \
-              -define:ODIN_TEST=true -define:ODIN_TEST_THREADS=4 -vet -strict-style
+            odin build "$tf" -file -collection:mdb=. -build-mode:object \
+              -out:build/test_check -define:ODIN_TEST_THREADS=4 -vet -strict-style
           done
 
   live:
@@ -135,12 +135,12 @@ jobs:
       - name: Type-check live tests
         # Compile the live test file to verify it type-checks. We don't
         # execute `odin test` because it takes 20+ minutes in CI.
-        # ODIN_TEST=true makes `odin build` synthesize the @(test) runner.
+        # -build-mode:object skips linking so no main entry point is required.
         run: |
           for tf in tests/*.odin; do
             echo "=== Type-checking $tf ==="
-            odin build "$tf" -file -collection:mdb=. -out:build/live_test_check \
-              -define:ODIN_TEST=true -define:ODIN_TEST_THREADS=4 -vet -strict-style
+            odin build "$tf" -file -collection:mdb=. -build-mode:object \
+              -out:build/live_test_check -define:ODIN_TEST_THREADS=4 -vet -strict-style
           done
 
       - name: Run examples
