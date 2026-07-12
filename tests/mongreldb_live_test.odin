@@ -554,7 +554,7 @@ test_history_retention_as_of_epoch_query :: proc(t: ^testing.T) {
 		_, err := m.set_history_retention_epochs(c^, orig)
 		testing.expectf(t, err == .None_, "restore retention failed: %s", m.mongrel_error_string(err))
 	}
-	hr0, err0 := m.set_history_retention_epochs(c^, 1000)
+	_, err0 := m.set_history_retention_epochs(c^, 1000)
 	testing.expectf(t, err0 == .None_, "set retention err: %s", m.mongrel_error_string(err0))
 
 	// Insert and update a row, capturing the epoch after the first insert.
@@ -571,11 +571,11 @@ test_history_retention_as_of_epoch_query :: proc(t: ^testing.T) {
 	if len(rows) > 0 {
 		// Verify the historical value (100), not the current value (200).
 		for row in rows {
-			obj, ok := row.(JSONObject)
+			obj, ok := row.(m.JSONObject)
 			if ok {
-				val, vok := json_object_get(obj, "amount")
+				val, vok := m.json_object_get(obj, "amount")
 				if vok {
-					iv, iok := val.(JSONInteger)
+					iv, iok := val.(m.JSONInteger)
 					if iok {
 						testing.expect(t, iv == 100, "AS OF EPOCH should return historical value 100")
 					}
