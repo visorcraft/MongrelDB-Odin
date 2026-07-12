@@ -208,7 +208,7 @@ column_to_json_full_static_default_matrix :: proc(t: ^testing.T) {
 		v, has := m.json_object_get(o, key)
 		testing.expectf(t, has, "missing %s in %s", key, json_str)
 		if !has { return }
-		switch exp in expected {
+		#partial switch exp in expected {
 		case m.JSONNull:
 			_, is_null := v.(m.JSONNull)
 			testing.expectf(t, is_null, "expected null default in %s", json_str)
