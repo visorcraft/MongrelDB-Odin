@@ -262,6 +262,7 @@ case:              fmt.eprintf("query/server error: %s\n", m.mongrel_error_strin
 | `where_(qb, type, params) -> ^QueryBuilder` | Add a native condition (AND-ed) |
 | `projection(qb, column_ids) -> ^QueryBuilder` | Set column projection |
 | `limit_(qb, n) -> ^QueryBuilder` | Set row limit |
+| `offset(qb, n) -> ^QueryBuilder` | Skip matching rows before the limit |
 | `execute(qb) -> ([]JSONValue, Mongrel_Error)` | Run the query; returns the rows |
 | `free_query_builder(qb)` | Release the builder's dynamic storage |
 

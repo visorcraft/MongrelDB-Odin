@@ -510,6 +510,8 @@ QueryBuilder :: struct {
 	has_proj:   bool,
 	limit_val:  i64,
 	has_limit:  bool,
+	offset_val: i64,
+	has_offset: bool,
 	allocator:  mem.Allocator,
 }
 
@@ -554,6 +556,13 @@ limit_ :: proc(qb: ^QueryBuilder, row_limit: i64) -> ^QueryBuilder {
 	return qb
 }
 
+// offset skips matching rows before applying the limit.
+offset :: proc(qb: ^QueryBuilder, row_offset: i64) -> ^QueryBuilder {
+	qb.offset_val = row_offset
+	qb.has_offset = true
+	return qb
+}
+
 // execute builds the request, POSTs it to `/kit/query`, decodes the result
 // set, and returns the rows. The caller owns each row JSONValue and the slice
 // itself; call json_destroy on every element and free_slice on the slice.
@@ -588,6 +597,9 @@ execute :: proc(qb: ^QueryBuilder, allocator := context.allocator) -> ([]JSONVal
 	}
 	if qb.has_limit {
 		json_object_set(&root, "limit", JSONInteger(qb.limit_val))
+	}
+	if qb.has_offset {
+		json_object_set(&root, "offset", JSONInteger(qb.offset_val))
 	}
 
 	payload := root
