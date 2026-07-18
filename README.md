@@ -13,7 +13,7 @@
 <p align="center">
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License" /></a>
   <a href="https://github.com/visorcraft/MongrelDB-Odin/actions/workflows/ci.yml"><img src="https://github.com/visorcraft/MongrelDB-Odin/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/visorcraft/MongrelDB/releases"><img src="https://img.shields.io/badge/server-v0.58.3-blue.svg" alt="MongrelDB server" /></a>
+  <a href="https://github.com/visorcraft/MongrelDB/releases"><img src="https://img.shields.io/badge/server-v0.59.1-blue.svg" alt="MongrelDB server" /></a>
   <a href="https://odin-lang.org/"><img src="https://img.shields.io/badge/Odin-dev--2026--60a35f.svg" alt="Odin" /></a>
 </p>
 
@@ -314,7 +314,7 @@ Fetch a prebuilt server binary from the [MongrelDB releases](https://github.com/
 ```sh
 mkdir -p bin
 curl -fsSL -o bin/mongreldb-server \
-  https://github.com/visorcraft/MongrelDB/releases/download/v0.58.3/mongreldb-server-linux-x64
+  https://github.com/visorcraft/MongrelDB/releases/download/v0.59.1/mongreldb-server-linux-x64
 chmod +x bin/mongreldb-server
 ```
 
