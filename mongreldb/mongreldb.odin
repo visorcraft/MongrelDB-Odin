@@ -916,13 +916,27 @@ map_status :: proc(code: int) -> Mongrel_Error {
 // ── Cell / column helpers ─────────────────────────────────────────────────
 
 // flatten_cells converts a slice of cells to the server's flat
-// `[col_id, value, col_id, value, ...]` JSON array.
+// `[col_id, value, ...]` JSON array in ascending column-id order.
+// Stable ordering is required for idempotency keys: the server hashes the
+// request payload, and unordered pair order would make two commits of the
+// same cells look like a reuse mismatch.
 flatten_cells :: proc(cells: []Cell, allocator := context.allocator) -> [dynamic]JSONValue {
+	sorted := make([]Cell, len(cells), allocator)
+	copy(sorted, cells)
+	// insertion sort by column id (small N)
+	for i in 1 ..< len(sorted) {
+		j := i
+		for j > 0 && sorted[j-1].id > sorted[j].id {
+			sorted[j-1], sorted[j] = sorted[j], sorted[j-1]
+			j -= 1
+		}
+	}
 	flat := make([dynamic]JSONValue, 0, len(cells) * 2, allocator)
-	for c in cells {
+	for c in sorted {
 		append(&flat, JSONInteger(c.id))
 		append(&flat, json_clone(c.value, allocator))
 	}
+	delete(sorted, allocator)
 	return flat
 }
 
