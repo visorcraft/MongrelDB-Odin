@@ -920,23 +920,32 @@ map_status :: proc(code: int) -> Mongrel_Error {
 // Stable ordering is required for idempotency keys: the server hashes the
 // request payload, and unordered pair order would make two commits of the
 // same cells look like a reuse mismatch.
+//
+// Note: this package defines a `delete` CRUD procedure that shadows the
+// builtin slice deleter, so scratch storage is freed with `free_slice`
+// (see json.odin).
 flatten_cells :: proc(cells: []Cell, allocator := context.allocator) -> [dynamic]JSONValue {
-	sorted := make([]Cell, len(cells), allocator)
+	n := len(cells)
+	flat := make([dynamic]JSONValue, 0, n * 2, allocator)
+	if n == 0 {
+		return flat
+	}
+	// Scratch copy so we can sort without mutating the caller's slice.
+	sorted := make([]Cell, n, allocator)
+	defer free_slice(sorted, allocator)
 	copy(sorted, cells)
-	// insertion sort by column id (small N)
-	for i in 1 ..< len(sorted) {
+	// Insertion sort by column id (row width is small).
+	for i in 1 ..< n {
 		j := i
-		for j > 0 && sorted[j-1].id > sorted[j].id {
-			sorted[j-1], sorted[j] = sorted[j], sorted[j-1]
+		for j > 0 && sorted[j - 1].id > sorted[j].id {
+			sorted[j - 1], sorted[j] = sorted[j], sorted[j - 1]
 			j -= 1
 		}
 	}
-	flat := make([dynamic]JSONValue, 0, len(cells) * 2, allocator)
 	for c in sorted {
 		append(&flat, JSONInteger(c.id))
 		append(&flat, json_clone(c.value, allocator))
 	}
-	delete(sorted, allocator)
 	return flat
 }
 
