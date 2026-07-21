@@ -104,6 +104,8 @@ Column :: struct {
 	default_scalar:     JSONValue,
 	has_default_expr: bool,
 	default_expr:     string,
+	has_embedding_source: bool,
+	embedding_source:     JSONValue,
 }
 
 // Options configures a `Client`. The strings are borrowed, not cloned: any
@@ -277,7 +279,7 @@ table_names :: proc(db: Client, allocator := context.allocator) -> ([]string, Mo
 // create_table creates a table named `name` with the given columns and
 // returns the assigned table id.
 create_table :: proc(db: Client, name: string, columns: []Column, allocator := context.allocator) -> (i64, Mongrel_Error) {
-	return create_table_impl(db, name, columns, JSONNull{}, false, allocator)
+	return create_table_impl(db, name, columns, JSONNull{}, false, JSONNull{}, false, allocator)
 }
 
 // create_table_with_constraints creates a table and adds the supplied
@@ -285,12 +287,21 @@ create_table :: proc(db: Client, name: string, columns: []Column, allocator := c
 // `{checks: [{name = "id_present", expr = ...}]}`. The caller retains
 // ownership of `constraints`.
 create_table_with_constraints :: proc(db: Client, name: string, columns: []Column, constraints: JSONValue, allocator := context.allocator) -> (i64, Mongrel_Error) {
-	return create_table_impl(db, name, columns, constraints, true, allocator)
+	return create_table_impl(db, name, columns, constraints, true, JSONNull{}, false, allocator)
+}
+
+// create_table_with_schema adds constraints and full secondary-index definitions.
+create_table_with_schema :: proc(db: Client, name: string, columns: []Column, constraints, indexes: JSONValue, allocator := context.allocator) -> (i64, Mongrel_Error) {
+	return create_table_impl(db, name, columns, constraints, true, indexes, true, allocator)
 }
 
 // create_table_payload builds the request object and its owned column array.
 // The returned constraints value is borrowed and remains owned by the caller.
 create_table_payload :: proc(name: string, columns: []Column, constraints: JSONValue, include_constraints: bool, allocator := context.allocator) -> (JSONObject, [dynamic]JSONValue) {
+	return create_table_payload_with_indexes(name, columns, constraints, include_constraints, JSONNull{}, false, allocator)
+}
+
+create_table_payload_with_indexes :: proc(name: string, columns: []Column, constraints: JSONValue, include_constraints: bool, indexes: JSONValue, include_indexes: bool, allocator := context.allocator) -> (JSONObject, [dynamic]JSONValue) {
 	cols := make([dynamic]JSONValue, 0, len(columns), allocator)
 	for c in columns {
 		append(&cols, column_to_value(c, allocator))
@@ -301,11 +312,14 @@ create_table_payload :: proc(name: string, columns: []Column, constraints: JSONV
 	if include_constraints {
 		json_object_set(&obj, "constraints", constraints)
 	}
+	if include_indexes {
+		json_object_set(&obj, "indexes", indexes)
+	}
 	return obj, cols
 }
 
-create_table_impl :: proc(db: Client, name: string, columns: []Column, constraints: JSONValue, include_constraints: bool, allocator: mem.Allocator) -> (i64, Mongrel_Error) {
-	obj, cols := create_table_payload(name, columns, constraints, include_constraints, allocator)
+create_table_impl :: proc(db: Client, name: string, columns: []Column, constraints: JSONValue, include_constraints: bool, indexes: JSONValue, include_indexes: bool, allocator: mem.Allocator) -> (i64, Mongrel_Error) {
+	obj, cols := create_table_payload_with_indexes(name, columns, constraints, include_constraints, indexes, include_indexes, allocator)
 	defer json_destroy(JSONArray(cols), allocator)
 	defer json_object_destroy(obj, allocator)
 	// The cloned table name is owned by obj; json_object_destroy does not free
@@ -969,6 +983,9 @@ column_to_value :: proc(c: Column, allocator := context.allocator) -> JSONValue 
 		json_object_set(&obj, "default_value", json_clone(c.default_scalar, allocator), allocator)
 	} else if c.has_default && c.default_value != "" {
 		json_object_set(&obj, "default_value", jstr(c.default_value, allocator))
+	}
+	if c.has_embedding_source {
+		json_object_set(&obj, "embedding_source", json_clone(c.embedding_source, allocator))
 	}
 	return obj
 }
