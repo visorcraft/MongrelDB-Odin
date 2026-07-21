@@ -376,6 +376,25 @@ create_table_payload_emits_constraints :: proc(t: ^testing.T) {
 }
 
 @(test)
+create_table_payload_preserves_ann_backend_options :: proc(t: ^testing.T) {
+	raw := `[{"name":"ann","column_id":2,"kind":"ann","options":{"ann":{"algorithm":"diskann","quantization":"dense","diskann":{"r":64,"l":128,"beam_width":8,"alpha":120}}}}]`
+	indexes, err := m.json_parse(transmute([]u8)raw)
+	if err != "" {
+		testing.fail(t)
+		return
+	}
+	defer m.json_destroy(indexes)
+	obj, cols := m.create_table_payload_with_indexes("vectors", nil, m.null_value(), false, indexes, true)
+	defer m.json_object_destroy(obj)
+	defer m.json_destroy(m.JSONArray(cols))
+	wire := m.json_to_string(obj)
+	defer m.free_string(wire)
+	testing.expect(t, contains(wire, "\"algorithm\":\"diskann\""))
+	testing.expect(t, contains(wire, "\"quantization\":\"dense\""))
+	testing.expect(t, contains(wire, "\"beam_width\":8"))
+}
+
+@(test)
 url_path_escape_escapes_spaces_and_slashes :: proc(t: ^testing.T) {
 	esc := m.url_path_escape("my table/with spaces")
 	defer m.free_string(esc)
