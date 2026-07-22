@@ -776,6 +776,42 @@ query_status :: proc(db: Client, query_id: string, allocator := context.allocato
 	return value, .None_
 }
 
+
+
+// parse_commit_hlc returns the HLC object when physical_micros is present.
+parse_commit_hlc :: proc(raw: JSONValue) -> (JSONValue, bool) {
+	#partial switch v in raw {
+	case JSONObject:
+		_, has := json_object_get(v, "physical_micros")
+		if !has { return nil, false }
+		return raw, true
+	}
+	return nil, false
+}
+
+// commit_hlc_from_status prefers durable → outcome → top-level last_commit_hlc.
+commit_hlc_from_status :: proc(status: JSONValue) -> (JSONValue, bool) {
+	#partial switch root in status {
+	case JSONObject:
+		for key in []string{"durable", "outcome"} {
+			if nest, has := json_object_get(root, key); has {
+				#partial switch n in nest {
+				case JSONObject:
+					if hlc, ok := json_object_get(n, "last_commit_hlc"); ok {
+						if out, good := parse_commit_hlc(hlc); good {
+							return out, true
+						}
+					}
+				}
+			}
+		}
+		if hlc, has := json_object_get(root, "last_commit_hlc"); has {
+			return parse_commit_hlc(hlc)
+		}
+	}
+	return nil, false
+}
+
 // cancel_query requests cancellation of a running SQL query.
 cancel_query :: proc(db: Client, query_id: string, allocator := context.allocator) -> (JSONValue, Mongrel_Error) {
 	if query_id == "" { return nil, .Query }
