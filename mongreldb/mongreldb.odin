@@ -20,7 +20,7 @@
 package mongreldb
 
 // VERSION is the client library version (aligned with the MongrelDB train).
-VERSION :: "0.63.1"
+VERSION :: "0.64.0"
 
 import "core:fmt"
 import "core:mem"
@@ -737,6 +737,62 @@ free_transaction :: proc(t: ^Transaction) {
 }
 
 // ── SQL ───────────────────────────────────────────────────────────────────
+
+// retrieve_text embeds text under the active semantic identity and runs ANN
+// retrieve (POST /kit/retrieve_text, 0.64+).
+retrieve_text :: proc(db: Client, table: string, embedding_column: i64, text: string, k: i64 = 0, allocator := context.allocator) -> (JSONValue, Mongrel_Error) {
+	if table == "" { return nil, .Query }
+	if text == "" { return nil, .Query }
+	root := json_object_make(allocator)
+	defer json_destroy(root, allocator)
+	json_object_set(&root, "table", jstr(table, allocator))
+	json_object_set(&root, "embedding_column", JSONInteger(embedding_column))
+	json_object_set(&root, "text", jstr(text, allocator))
+	if k > 0 {
+		json_object_set(&root, "k", JSONInteger(k))
+	}
+	body, err := raw_request(db, allocator, .POST, "/kit/retrieve_text", root)
+	if err != .None_ { return nil, err }
+	defer free_slice(body, allocator)
+	if strings.trim_space(string(body)) == "" {
+		empty := json_object_make(allocator)
+		return empty, .None_
+	}
+	value, jerr := json_parse(body, allocator)
+	if jerr != "" { return nil, .Json }
+	return value, .None_
+}
+
+// query_status fetches retained SQL status for durable recovery.
+query_status :: proc(db: Client, query_id: string, allocator := context.allocator) -> (JSONValue, Mongrel_Error) {
+	if query_id == "" { return nil, .Query }
+	path := strings.concatenate({"/queries/", url_path_escape(query_id)}, allocator)
+	defer delete(path, allocator)
+	body, err := raw_request(db, allocator, .GET, path, nil)
+	if err != .None_ { return nil, err }
+	defer free_slice(body, allocator)
+	value, jerr := json_parse(body, allocator)
+	if jerr != "" { return nil, .Json }
+	return value, .None_
+}
+
+// cancel_query requests cancellation of a running SQL query.
+cancel_query :: proc(db: Client, query_id: string, allocator := context.allocator) -> (JSONValue, Mongrel_Error) {
+	if query_id == "" { return nil, .Query }
+	path := strings.concatenate({"/queries/", url_path_escape(query_id), "/cancel"}, allocator)
+	defer delete(path, allocator)
+	empty := json_object_make(allocator)
+	defer json_destroy(empty, allocator)
+	body, err := raw_request(db, allocator, .POST, path, empty)
+	if err != .None_ { return nil, err }
+	defer free_slice(body, allocator)
+	if strings.trim_space(string(body)) == "" {
+		return json_object_make(allocator), .None_
+	}
+	value, jerr := json_parse(body, allocator)
+	if jerr != "" { return nil, .Json }
+	return value, .None_
+}
 
 // sql executes a SQL statement via the `/sql` endpoint, requesting JSON
 // output. The server returns a JSON array of row objects keyed by column
