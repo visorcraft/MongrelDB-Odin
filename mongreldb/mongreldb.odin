@@ -20,7 +20,7 @@
 package mongreldb
 
 // VERSION is the client library version (aligned with the MongrelDB train).
-VERSION :: "0.64.0"
+VERSION :: "0.64.2"
 
 import "core:fmt"
 import "core:mem"
