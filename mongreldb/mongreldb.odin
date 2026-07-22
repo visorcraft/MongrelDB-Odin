@@ -767,7 +767,7 @@ retrieve_text :: proc(db: Client, table: string, embedding_column: i64, text: st
 query_status :: proc(db: Client, query_id: string, allocator := context.allocator) -> (JSONValue, Mongrel_Error) {
 	if query_id == "" { return nil, .Query }
 	path := strings.concatenate({"/queries/", url_path_escape(query_id)}, allocator)
-	defer delete(path, allocator)
+	defer free_string(path, allocator)
 	body, err := raw_request(db, allocator, .GET, path, nil)
 	if err != .None_ { return nil, err }
 	defer free_slice(body, allocator)
@@ -793,7 +793,8 @@ parse_commit_hlc :: proc(raw: JSONValue) -> (JSONValue, bool) {
 commit_hlc_from_status :: proc(status: JSONValue) -> (JSONValue, bool) {
 	#partial switch root in status {
 	case JSONObject:
-		for key in []string{"durable", "outcome"} {
+		keys := []string{"durable", "outcome"}
+		for key in keys {
 			if nest, has := json_object_get(root, key); has {
 				#partial switch n in nest {
 				case JSONObject:
@@ -816,7 +817,7 @@ commit_hlc_from_status :: proc(status: JSONValue) -> (JSONValue, bool) {
 cancel_query :: proc(db: Client, query_id: string, allocator := context.allocator) -> (JSONValue, Mongrel_Error) {
 	if query_id == "" { return nil, .Query }
 	path := strings.concatenate({"/queries/", url_path_escape(query_id), "/cancel"}, allocator)
-	defer delete(path, allocator)
+	defer free_string(path, allocator)
 	empty := json_object_make(allocator)
 	defer json_destroy(empty, allocator)
 	body, err := raw_request(db, allocator, .POST, path, empty)

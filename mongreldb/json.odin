@@ -494,7 +494,7 @@ parse_number :: proc(p: ^Parser) -> (JSONValue, string) {
 	start := p.pos
 	is_float := false
 	if p.pos < len(p.data) && p.data[p.pos] == '-' { p.pos += 1 }
-	for p.pos < len(p.data) {
+	scan: for p.pos < len(p.data) {
 		c := p.data[p.pos]
 		switch c {
 		case '0','1','2','3','4','5','6','7','8','9':
@@ -503,7 +503,7 @@ parse_number :: proc(p: ^Parser) -> (JSONValue, string) {
 			is_float = true
 			p.pos += 1
 		case:
-			break
+			break scan
 		}
 	}
 	num_str := string(p.data[start:p.pos])
